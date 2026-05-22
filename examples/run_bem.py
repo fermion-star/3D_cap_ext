@@ -15,14 +15,16 @@ def main() -> None:
             ("left_extension", (160.0, 230.0, 230.0), (190.0, 270.0, 270.0)),
         ],
     )
-    solver = DenseBEMSolver(max_panel_size=20.0)
+    solver = DenseBEMSolver(max_panel_size=20.0, add_reference_node=True)
     result = solver.solve(problem)
 
     np.set_printoptions(precision=6, suppress=False)
     print("nets:", result.net_names)
     print("panel_count:", result.panel_count)
-    print("capacitance matrix [F]:")
+    print("capacitance matrix with enclosure/reference net [F]:")
     print(result.capacitance)
+    print("row sums [F]:")
+    print(result.capacitance.sum(axis=1))
 
 
 if __name__ == "__main__":

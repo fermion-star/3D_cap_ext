@@ -35,3 +35,29 @@ def test_overlapping_boxes_are_solved_as_one_net() -> None:
 
     assert result.capacitance.shape == (1, 1)
     assert result.capacitance[0, 0] > 0
+
+
+def test_reference_node_augmented_matrix_has_maxwell_properties() -> None:
+    problem = CapacitanceProblem.from_boxes(
+        [
+            ("a", (0, 0, 0), (1, 1, 1)),
+            ("b", (3, 0, 0), (4, 1, 1)),
+        ],
+        domain_min=(-2, -2, -2),
+        domain_max=(6, 3, 3),
+    )
+    result = DenseBEMSolver(
+        max_panel_size=0.5,
+        add_reference_node=True,
+        reference_name="enclosure",
+    ).solve(problem)
+    capacitance = result.capacitance
+
+    assert result.net_names == ("a", "b", "enclosure")
+    assert result.reference_net_index == 2
+    assert capacitance.shape == (3, 3)
+    assert np.allclose(capacitance, capacitance.T)
+    assert np.allclose(capacitance.sum(axis=1), 0.0, atol=1e-24)
+    assert np.all(np.diag(capacitance) > 0)
+    assert np.all(capacitance[~np.eye(3, dtype=bool)] < 0)
+    assert np.array_equal(result.reduced_capacitance, capacitance[:2, :2])

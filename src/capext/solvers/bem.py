@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from capext.capacitance import augment_with_reference_node
 from capext.mesh import SurfacePanel, mesh_net_surfaces
 from capext.problem import CapacitanceProblem
 from capext.solvers.base import CapacitanceSolver
@@ -14,6 +15,15 @@ class BEMResult:
     capacitance: np.ndarray
     net_names: tuple[str, ...]
     panel_count: int
+    reference_net_index: int | None = None
+
+    @property
+    def reduced_capacitance(self) -> np.ndarray:
+        if self.reference_net_index is None:
+            return self.capacitance
+        mask = np.ones(self.capacitance.shape[0], dtype=bool)
+        mask[self.reference_net_index] = False
+        return self.capacitance[np.ix_(mask, mask)]
 
 
 class DenseBEMSolver(CapacitanceSolver):
@@ -25,10 +35,14 @@ class DenseBEMSolver(CapacitanceSolver):
         max_panel_size: float = 20.0,
         symmetrize: bool = True,
         contact_tol: float = 1e-12,
+        add_reference_node: bool = False,
+        reference_name: str = "enclosure",
     ) -> None:
         self.max_panel_size = max_panel_size
         self.symmetrize = symmetrize
         self.contact_tol = contact_tol
+        self.add_reference_node = add_reference_node
+        self.reference_name = reference_name
 
     def solve(self, problem: CapacitanceProblem) -> BEMResult:
         nets = problem.nets(tol=self.contact_tol)
@@ -56,10 +70,18 @@ class DenseBEMSolver(CapacitanceSolver):
         if self.symmetrize:
             capacitance = 0.5 * (capacitance + capacitance.T)
 
+        net_names = tuple(net.name for net in nets)
+        reference_net_index = None
+        if self.add_reference_node:
+            capacitance = augment_with_reference_node(capacitance)
+            net_names = (*net_names, self.reference_name)
+            reference_net_index = len(net_names) - 1
+
         return BEMResult(
             capacitance=capacitance,
-            net_names=tuple(net.name for net in nets),
+            net_names=net_names,
             panel_count=len(panels),
+            reference_net_index=reference_net_index,
         )
 
     def solve_matrix(self, problem: CapacitanceProblem) -> np.ndarray:
