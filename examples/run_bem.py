@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import numpy as np
 
+from draw_run_bem_geometry import count_bem_unknowns, draw, draw_discretization
+
 from capext.problem import CapacitanceProblem
 from capext.solvers import DenseBEMSolver
 
 
 def main() -> None:
+    max_panel_size = 20.0
     problem = CapacitanceProblem.from_boxes(
         [
             ("left", (100.0, 220.0, 220.0), (160.0, 280.0, 280.0)),
@@ -15,7 +18,24 @@ def main() -> None:
             ("left_extension", (160.0, 230.0, 230.0), (190.0, 270.0, 270.0)),
         ],
     )
-    solver = DenseBEMSolver(max_panel_size=20.0, add_reference_node=True)
+    draw(problem, show=True)
+    draw_discretization(problem, max_panel_size=max_panel_size, show=True)
+
+    unknowns_without_outer_box = count_bem_unknowns(
+        problem,
+        max_panel_size=max_panel_size,
+        include_physical_outer_box=False,
+    )
+    unknowns_with_outer_box = count_bem_unknowns(
+        problem,
+        max_panel_size=max_panel_size,
+        include_physical_outer_box=True,
+    )
+    print("BEM unknowns without physical outer box:", unknowns_without_outer_box)
+    print("BEM unknowns with meshed physical outer box:", unknowns_with_outer_box)
+    print("Current reference-node enclosure adds no BEM unknowns.")
+
+    solver = DenseBEMSolver(max_panel_size=max_panel_size, add_reference_node=True)
     result = solver.solve(problem)
 
     np.set_printoptions(precision=6, suppress=False)

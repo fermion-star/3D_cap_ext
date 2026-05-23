@@ -2,18 +2,24 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
-
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
+from capext.geometry import BoxConductor, NetConductor
+from capext.mesh import SurfacePanel, mesh_net_surfaces
+from capext.problem import CapacitanceProblem
 
-BOXES = [
-    ("left", (100.0, 220.0, 220.0), (160.0, 280.0, 280.0), "#4C78A8"),
-    ("left_extension", (160.0, 230.0, 230.0), (190.0, 270.0, 270.0), "#72B7B2"),
-    ("right", (260.0, 220.0, 220.0), (320.0, 280.0, 280.0), "#F58518"),
+
+NET_COLORS = [
+    "#4C78A8",
+    "#F58518",
+    "#54A24B",
+    "#E45756",
+    "#72B7B2",
+    "#B279A2",
+    "#FF9DA6",
+    "#9D755D",
+    "#BAB0AC",
 ]
 
 
@@ -40,49 +46,161 @@ def box_faces(lo: tuple[float, float, float], hi: tuple[float, float, float]) ->
     ]
 
 
-def draw() -> Path:
+def draw(problem: CapacitanceProblem, *, show: bool = True) -> Path:
     output = Path(__file__).with_name("run_bem_geometry.png")
 
     fig = plt.figure(figsize=(9, 7), dpi=180)
     ax = fig.add_subplot(111, projection="3d")
 
-    for name, lo, hi, color in BOXES:
-        faces = box_faces(lo, hi)
-        poly = Poly3DCollection(
-            faces,
-            facecolors=color,
-            edgecolors="#222222",
-            linewidths=0.7,
-            alpha=0.7,
+    all_min = []
+    all_max = []
+    legend_handles = []
+    for net_index, net in enumerate(problem.nets()):
+        color = NET_COLORS[net_index % len(NET_COLORS)]
+        legend_handles.append(
+            plt.Line2D(
+                [0],
+                [0],
+                marker="s",
+                color="w",
+                label=net.name,
+                markerfacecolor=color,
+                markersize=9,
+            )
         )
-        ax.add_collection3d(poly)
-        cx = 0.5 * (lo[0] + hi[0])
-        cy = 0.5 * (lo[1] + hi[1])
-        cz = hi[2] + 7.0
-        ax.text(cx, cy, cz, name, ha="center", va="bottom", fontsize=8)
+        for conductor in net.boxes:
+            box = conductor.box
+            lo = tuple(float(value) for value in box.min_array)
+            hi = tuple(float(value) for value in box.max_array)
+            all_min.append(box.min_array)
+            all_max.append(box.max_array)
 
-    ax.set_xlim(80, 340)
-    ax.set_ylim(200, 300)
-    ax.set_zlim(200, 300)
+            faces = box_faces(lo, hi)
+            poly = Poly3DCollection(
+                faces,
+                facecolors=color,
+                edgecolors="#222222",
+                linewidths=0.7,
+                alpha=0.7,
+            )
+            ax.add_collection3d(poly)
+            cx = 0.5 * (lo[0] + hi[0])
+            cy = 0.5 * (lo[1] + hi[1])
+            cz = hi[2] + 7.0
+            ax.text(cx, cy, cz, conductor.name, ha="center", va="bottom", fontsize=8)
+
+    mins, maxs = _plot_bounds(all_min, all_max)
+    ax.set_xlim(mins[0], maxs[0])
+    ax.set_ylim(mins[1], maxs[1])
+    ax.set_zlim(mins[2], maxs[2])
     ax.set_xlabel("x")
     ax.set_ylabel("y")
     ax.set_zlabel("z")
     ax.set_title("examples/run_bem.py geometry")
     ax.view_init(elev=24, azim=-56)
-    ax.set_box_aspect((260, 100, 100))
+    ax.set_box_aspect(maxs - mins)
+    ax.legend(handles=legend_handles, loc="upper left")
+
+    fig.tight_layout()
+    fig.savefig(output)
+    if show:
+        print("Close the 3D geometry window to continue.")
+        plt.show()
+    return output
+
+
+def draw_discretization(
+    problem: CapacitanceProblem,
+    *,
+    max_panel_size: float,
+    show: bool = True,
+) -> Path:
+    output = Path(__file__).with_name("run_bem_discretization.png")
+    nets = problem.nets()
+    panels = mesh_net_surfaces(nets, max_panel_size=max_panel_size)
+
+    fig = plt.figure(figsize=(9, 7), dpi=180)
+    ax = fig.add_subplot(111, projection="3d")
+
+    all_min = []
+    all_max = []
+    for net in nets:
+        for conductor in net.boxes:
+            all_min.append(conductor.box.min_array)
+            all_max.append(conductor.box.max_array)
+
+    for panel in panels:
+        color = NET_COLORS[panel.net_index % len(NET_COLORS)]
+        poly = Poly3DCollection(
+            [panel.corners],
+            facecolors=color,
+            edgecolors="#202020",
+            linewidths=0.25,
+            alpha=0.72,
+        )
+        ax.add_collection3d(poly)
+
+    mins, maxs = _plot_bounds(all_min, all_max)
+    ax.set_xlim(mins[0], maxs[0])
+    ax.set_ylim(mins[1], maxs[1])
+    ax.set_zlim(mins[2], maxs[2])
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_zlabel("z")
+    ax.set_title(f"BEM surface discretization ({len(panels)} unknowns)")
+    ax.view_init(elev=24, azim=-56)
+    ax.set_box_aspect(maxs - mins)
 
     legend_handles = [
-        plt.Line2D([0], [0], marker="s", color="w", label="left net", markerfacecolor="#4C78A8", markersize=9),
-        plt.Line2D([0], [0], marker="s", color="w", label="left extension same net", markerfacecolor="#72B7B2", markersize=9),
-        plt.Line2D([0], [0], marker="s", color="w", label="right net", markerfacecolor="#F58518", markersize=9),
+        plt.Line2D(
+            [0],
+            [0],
+            marker="s",
+            color="w",
+            label=net.name,
+            markerfacecolor=NET_COLORS[index % len(NET_COLORS)],
+            markersize=9,
+        )
+        for index, net in enumerate(nets)
     ]
     ax.legend(handles=legend_handles, loc="upper left")
 
     fig.tight_layout()
     fig.savefig(output)
-    plt.close(fig)
+    if show:
+        print("Close the BEM discretization window to continue.")
+        plt.show()
     return output
 
 
+def count_bem_unknowns(
+    problem: CapacitanceProblem,
+    *,
+    max_panel_size: float,
+    include_physical_outer_box: bool = False,
+) -> int:
+    nets = problem.nets()
+    if include_physical_outer_box:
+        outer = BoxConductor("physical_outer_box", problem.domain)
+        nets = [
+            *nets,
+            NetConductor("physical_outer_box", (outer,)),
+        ]
+    return len(mesh_net_surfaces(nets, max_panel_size=max_panel_size))
+
+
+def _plot_bounds(all_min, all_max):
+    if not all_min:
+        raise ValueError("problem has no conductor boxes to draw")
+
+    import numpy as np
+
+    mins = np.min(np.vstack(all_min), axis=0)
+    maxs = np.max(np.vstack(all_max), axis=0)
+    span = maxs - mins
+    padding = np.maximum(span * 0.15, 10.0)
+    return mins - padding, maxs + padding
+
+
 if __name__ == "__main__":
-    print(draw())
+    raise SystemExit("Call draw(problem) from examples/run_bem.py.")

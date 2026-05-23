@@ -13,6 +13,7 @@ class SurfacePanel:
     normal: np.ndarray
     area: float
     net_index: int
+    corners: np.ndarray
 
 
 def mesh_net_surfaces(
@@ -33,11 +34,17 @@ def mesh_net_surfaces(
                     face_value = box.min_array[axis] if side == "min" else box.max_array[axis]
                     normal = np.zeros(3)
                     normal[axis] = normal_sign
-                    for center, area in _face_panels(box, axis, face_value, net_boxes, max_panel_size):
+                    for center, area, corners in _face_panels(box, axis, face_value, net_boxes, max_panel_size):
                         probe = center + normal * max(tol * 16.0, max_panel_size * 1e-9)
                         if _inside_any_box(probe, net_boxes, tol=tol):
                             continue
-                        panel = SurfacePanel(center=center, normal=normal.copy(), area=area, net_index=net_index)
+                        panel = SurfacePanel(
+                            center=center,
+                            normal=normal.copy(),
+                            area=area,
+                            net_index=net_index,
+                            corners=corners,
+                        )
                         panels_by_key[_panel_key(panel)] = panel
     return list(panels_by_key.values())
 
@@ -48,7 +55,7 @@ def _face_panels(
     face_value: float,
     net_boxes: list[AxisAlignedBox],
     max_panel_size: float,
-) -> list[tuple[np.ndarray, float]]:
+) -> list[tuple[np.ndarray, float, np.ndarray]]:
     axes = [idx for idx in range(3) if idx != axis]
     a0, a1 = axes
     breaks0 = _axis_breaks(box.min_array[a0], box.max_array[a0], net_boxes, a0, max_panel_size)
@@ -61,7 +68,14 @@ def _face_panels(
             center[axis] = face_value
             center[a0] = 0.5 * (lo0 + hi0)
             center[a1] = 0.5 * (lo1 + hi1)
-            panels.append((center, float((hi0 - lo0) * (hi1 - lo1))))
+            corners = []
+            for c0, c1 in ((lo0, lo1), (hi0, lo1), (hi0, hi1), (lo0, hi1)):
+                corner = np.zeros(3)
+                corner[axis] = face_value
+                corner[a0] = c0
+                corner[a1] = c1
+                corners.append(corner)
+            panels.append((center, float((hi0 - lo0) * (hi1 - lo1)), np.asarray(corners)))
     return panels
 
 

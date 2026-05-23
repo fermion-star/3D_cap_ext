@@ -73,13 +73,9 @@ class DenseBEMSolver(CapacitanceSolver):
         panel_areas = np.asarray([panel.area for panel in panels], dtype=float)
 
         net_count = len(nets)
-        capacitance = np.zeros((net_count, net_count), dtype=float)
-        for driven_net in range(net_count):
-            potentials = (panel_net_indices == driven_net).astype(float)
-            sigma = np.linalg.solve(influence, potentials)
-            for net_index in range(net_count):
-                mask = panel_net_indices == net_index
-                capacitance[net_index, driven_net] = float(np.sum(sigma[mask] * panel_areas[mask]))
+        panel_to_net = np.eye(net_count, dtype=float)[panel_net_indices]
+        sigma = np.linalg.solve(influence, panel_to_net)
+        capacitance = panel_to_net.T @ (sigma * panel_areas[:, np.newaxis])
 
         if self.symmetrize:
             capacitance = 0.5 * (capacitance + capacitance.T)
