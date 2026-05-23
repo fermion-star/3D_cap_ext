@@ -6,6 +6,11 @@ import numpy as np
 
 from capext.capacitance import augment_with_reference_node
 from capext.mesh import SurfacePanel, mesh_net_surfaces
+from capext.panel_integrals import (
+    disk_potential_coefficient_multipole,
+    equivalent_disk_radius,
+    point_center_panel_coefficient,
+)
 from capext.problem import CapacitanceProblem
 from capext.solvers.base import CapacitanceSolver
 
@@ -37,12 +42,16 @@ class DenseBEMSolver(CapacitanceSolver):
         contact_tol: float = 1e-12,
         add_reference_node: bool = False,
         reference_name: str = "enclosure",
+        point_approximation_ratio: float = 5.0,
+        multipole_order: int = 24,
     ) -> None:
         self.max_panel_size = max_panel_size
         self.symmetrize = symmetrize
         self.contact_tol = contact_tol
         self.add_reference_node = add_reference_node
         self.reference_name = reference_name
+        self.point_approximation_ratio = point_approximation_ratio
+        self.multipole_order = multipole_order
 
     def solve(self, problem: CapacitanceProblem) -> BEMResult:
         nets = problem.nets(tol=self.contact_tol)
@@ -54,7 +63,12 @@ class DenseBEMSolver(CapacitanceSolver):
         if not panels:
             raise ValueError("no surface panels were generated")
 
-        influence = self._build_influence_matrix(panels, problem.epsilon)
+        influence = self._build_influence_matrix(
+            panels,
+            problem.epsilon,
+            point_approximation_ratio=self.point_approximation_ratio,
+            multipole_order=self.multipole_order,
+        )
         panel_net_indices = np.asarray([panel.net_index for panel in panels], dtype=int)
         panel_areas = np.asarray([panel.area for panel in panels], dtype=float)
 
@@ -88,18 +102,37 @@ class DenseBEMSolver(CapacitanceSolver):
         return self.solve(problem).capacitance
 
     @staticmethod
-    def _build_influence_matrix(panels: list[SurfacePanel], epsilon: float) -> np.ndarray:
+    def _build_influence_matrix(
+        panels: list[SurfacePanel],
+        epsilon: float,
+        *,
+        point_approximation_ratio: float = 5.0,
+        multipole_order: int = 24,
+    ) -> np.ndarray:
         centers = np.asarray([panel.center for panel in panels], dtype=float)
+        normals = np.asarray([panel.normal for panel in panels], dtype=float)
         areas = np.asarray([panel.area for panel in panels], dtype=float)
+        radii = equivalent_disk_radius(areas)
         count = len(panels)
         matrix = np.empty((count, count), dtype=float)
-        coefficient = 1.0 / (4.0 * np.pi * epsilon)
 
         for i in range(count):
             delta = centers[i] - centers
             distance = np.linalg.norm(delta, axis=1)
             distance[i] = np.inf
-            matrix[i, :] = coefficient * areas / distance
-            equivalent_radius = np.sqrt(areas[i] / np.pi)
-            matrix[i, i] = equivalent_radius / (2.0 * epsilon)
+            matrix[i, :] = point_center_panel_coefficient(areas, distance, epsilon)
+
+            use_multipole = (distance > radii) & (distance <= point_approximation_ratio * radii)
+            if np.any(use_multipole):
+                cos_theta = np.einsum("ij,ij->i", delta[use_multipole], normals[use_multipole])
+                cos_theta = cos_theta / distance[use_multipole]
+                matrix[i, use_multipole] = disk_potential_coefficient_multipole(
+                    distance[use_multipole],
+                    cos_theta,
+                    radii[use_multipole],
+                    epsilon,
+                    max_order=multipole_order,
+                )
+
+            matrix[i, i] = radii[i] / (2.0 * epsilon)
         return matrix

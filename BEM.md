@@ -40,7 +40,7 @@ $$
 
 ## Influence matrix
 
-The potential at collocation point \(\mathbf r_i\) due to panel \(j\) is
+The potential at collocation point \(\mathbf r_i\) due to panel \(j\) is first
 approximated by treating the panel charge through the free-space Green's
 function evaluated at the panel center:
 
@@ -55,6 +55,11 @@ M_{ij}
 = \frac{A_j}{4\pi\epsilon\,\lVert \mathbf r_i-\mathbf r_j\rVert},
 \qquad i\ne j .
 $$
+
+This is the monopole term of the disk expansion. The implementation uses it for
+far interactions. For nearer off-diagonal interactions, it replaces the point
+center coefficient with the equal-area disk multipole expansion described
+below.
 
 This gives the dense linear system:
 
@@ -113,9 +118,49 @@ $$
 where \(P_\ell\) is the Legendre polynomial. Odd \(\ell\) terms vanish because
 \(P_\ell(0)=0\).
 
-For the current BEM diagonal term we only need the potential at the center of
-the disk on its surface. There the distance from the target to a source point is
-\(\rho\), and \(dA'=\rho\,d\rho\,d\alpha\), so
+For an off-diagonal source panel \(j\), define the equal-area disk radius
+
+$$
+R_j = \sqrt{\frac{A_j}{\pi}},
+$$
+
+and let \(r=\lVert \mathbf r_i-\mathbf r_j\rVert\). The multipole expansion is
+used only in its convergence domain \(r>R_j\). For \(r>kR_j\), the code switches
+back to the point-center approximation.
+
+If an off-diagonal interaction has \(r\le R_j\), the multipole series is not
+used because it is outside its convergence domain. The current prototype falls
+back to the point-center coefficient for that case. For higher accuracy, this
+near-field corner should be replaced by rectangular-panel analytic integration
+or a dedicated numerical quadrature.
+
+The default is
+
+$$
+k=5.
+$$
+
+This value comes from scanning \(\theta\in[0,\pi]\) and finding where the
+worst-case relative difference between the full disk multipole and the
+point-center monopole falls below \(1\%\):
+
+$$
+\max_\theta
+\frac{
+  \left|\phi_{\text{point}}(r)-\phi_{\text{disk}}(r,\theta)\right|
+}{
+  \left|\phi_{\text{disk}}(r,\theta)\right|
+}
+< 0.01,
+\qquad r>kR .
+$$
+
+Numerically, the threshold is very close to \(k=5\), with the worst case on the
+disk axis.
+
+For the diagonal term we only need the potential at the center of the disk on
+its surface. There the distance from the target to a source point is \(\rho\),
+and \(dA'=\rho\,d\rho\,d\alpha\), so
 
 $$
 \begin{aligned}

@@ -14,4 +14,4 @@ Input boxes are merged into electrical nets when two boxes overlap in 3D volume 
 PYTHONPATH=src python examples/run_bem.py
 ```
 
-The BEM solver uses rectangular constant-charge panels on the exterior surface of each merged net. The first self-panel term is an equal-area disk approximation; this is good enough for a prototype and can later be replaced with rectangular analytic integrals.
+The BEM solver uses rectangular constant-charge panels on the exterior surface of each merged net. It approximates panels as equal-area disks for self terms and near off-axis interactions, while far interactions use the faster point-center approximation.
