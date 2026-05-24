@@ -65,8 +65,9 @@ class FRWSolver(CapacitanceSolver):
     """Prototype Floating Random Walk solver with cubic transition domains.
 
     This is a first executable FRW estimator, not yet an RWCap-grade solver. It
-    uses a uniformly sampled axis-aligned Gaussian box and a discretized
-    centered-cube surface Green-function table for transition-cube exits.
+    uses a uniformly sampled axis-aligned Gaussian box, a closed-form first-step
+    omega weight, and a discretized centered-cube surface Green-function table
+    for transition-cube exits.
     """
 
     def __init__(
@@ -176,17 +177,30 @@ class FRWSolver(CapacitanceSolver):
         for observation_net_index, net in enumerate(nets):
             gaussian_box = self.gaussian_box(problem, net)
             gaussian_area = _box_surface_area(gaussian_box)
-            flux_weight = problem.epsilon * gaussian_area / self.gaussian_padding
             samples = []
 
             for sample_index in range(self.samples_per_observation_net):
-                start = _sample_box_surface(gaussian_box, self.rng)
+                surface_sample = _sample_box_surface_with_normal(gaussian_box, self.rng)
+                start = surface_sample.point
                 record_trace = sample_index == 0
-                walk = self._walk_to_boundary(
+                first_step = self._sample_transition(
                     start,
                     outer_boundary,
                     nets,
+                )
+                omega = (
+                    problem.epsilon
+                    * gaussian_area
+                    * float(np.dot(first_step.negative_green_gradient, surface_sample.normal))
+                    / first_step.proposal_density
+                )
+                walk = self._walk_to_boundary(
+                    first_step.point,
+                    outer_boundary,
+                    nets,
                     record_trace=record_trace,
+                    initial_points=(start, first_step.point),
+                    initial_transition_boxes=(_cube_box(start, first_step.half_size),),
                 )
                 hit_net = walk.hit_net_index
                 if record_trace:
@@ -201,8 +215,7 @@ class FRWSolver(CapacitanceSolver):
                     )
                 sample = np.zeros(net_count, dtype=float)
                 if hit_net is not None:
-                    sample[hit_net] -= flux_weight
-                sample[observation_net_index] += flux_weight
+                    sample[hit_net] += omega
                 samples.append(sample)
 
                 current_samples = np.asarray(samples)
@@ -292,10 +305,14 @@ class FRWSolver(CapacitanceSolver):
         nets: list[NetConductor],
         *,
         record_trace: bool = False,
+        initial_points: tuple[np.ndarray, ...] = (),
+        initial_transition_boxes: tuple[AxisAlignedBox, ...] = (),
     ) -> _WalkOutcome:
         point = np.asarray(start, dtype=float)
-        points = [point.copy()] if record_trace else []
-        transition_boxes = [] if record_trace else []
+        points = [np.asarray(initial_point, dtype=float).copy() for initial_point in initial_points] if record_trace else []
+        transition_boxes = list(initial_transition_boxes) if record_trace else []
+        if record_trace and not points:
+            points.append(point.copy())
 
         for _ in range(self.max_steps_per_walk):
             hit_net = _containing_net(point, nets, tol=self.hit_tolerance)
@@ -323,6 +340,28 @@ class FRWSolver(CapacitanceSolver):
         self._escaped_walks += 1
         return _WalkOutcome(None, tuple(points), tuple(transition_boxes), escaped=True)
 
+    def _sample_transition(
+        self,
+        point: np.ndarray,
+        outer_boundary: AxisAlignedBox,
+        nets: list[NetConductor],
+    ) -> _TransitionSample:
+        half_size = self._transition_half_size(point, outer_boundary, nets)
+        return self._transition_sampler.sample_with_weight_data(point, half_size, self.rng)
+
+    def _transition_half_size(
+        self,
+        point: np.ndarray,
+        outer_boundary: AxisAlignedBox,
+        nets: list[NetConductor],
+    ) -> float:
+        domain_distance = _distance_to_domain_boundary_linf(point, outer_boundary)
+        conductor_distance, _ = _nearest_conductor_linf(point, nets)
+        nearest_distance = min(domain_distance, conductor_distance)
+        if nearest_distance <= self.hit_tolerance:
+            return self.hit_tolerance
+        return self.transition_safety * nearest_distance
+
 
 @dataclass(frozen=True)
 class _WalkOutcome:
@@ -330,6 +369,21 @@ class _WalkOutcome:
     points: tuple[np.ndarray, ...]
     transition_boxes: tuple[AxisAlignedBox, ...]
     escaped: bool
+
+
+@dataclass(frozen=True)
+class _SurfaceSample:
+    point: np.ndarray
+    normal: np.ndarray
+
+
+@dataclass(frozen=True)
+class _TransitionSample:
+    point: np.ndarray
+    half_size: float
+    proposal_density: float
+    negative_green_gradient: np.ndarray
+    face: int
 
 
 def _augment_standard_error_shape(standard_error: np.ndarray) -> np.ndarray:
@@ -356,6 +410,10 @@ def _box_surface_area(box: AxisAlignedBox) -> float:
 
 
 def _sample_box_surface(box: AxisAlignedBox, rng: np.random.Generator) -> np.ndarray:
+    return _sample_box_surface_with_normal(box, rng).point
+
+
+def _sample_box_surface_with_normal(box: AxisAlignedBox, rng: np.random.Generator) -> _SurfaceSample:
     lo = box.min_array
     hi = box.max_array
     dx, dy, dz = box.size
@@ -363,31 +421,38 @@ def _sample_box_surface(box: AxisAlignedBox, rng: np.random.Generator) -> np.nda
     face = int(rng.choice(6, p=face_areas / np.sum(face_areas)))
     u = rng.random(2)
     point = np.empty(3, dtype=float)
+    normal = np.zeros(3, dtype=float)
     if face == 0:
         point[0] = lo[0]
         point[1] = lo[1] + u[0] * dy
         point[2] = lo[2] + u[1] * dz
+        normal[0] = -1.0
     elif face == 1:
         point[0] = hi[0]
         point[1] = lo[1] + u[0] * dy
         point[2] = lo[2] + u[1] * dz
+        normal[0] = 1.0
     elif face == 2:
         point[0] = lo[0] + u[0] * dx
         point[1] = lo[1]
         point[2] = lo[2] + u[1] * dz
+        normal[1] = -1.0
     elif face == 3:
         point[0] = lo[0] + u[0] * dx
         point[1] = hi[1]
         point[2] = lo[2] + u[1] * dz
+        normal[1] = 1.0
     elif face == 4:
         point[0] = lo[0] + u[0] * dx
         point[1] = lo[1] + u[1] * dy
         point[2] = lo[2]
+        normal[2] = -1.0
     else:
         point[0] = lo[0] + u[0] * dx
         point[1] = lo[1] + u[1] * dy
         point[2] = hi[2]
-    return point
+        normal[2] = 1.0
+    return _SurfaceSample(point=point, normal=normal)
 
 
 class CenteredCubeGreenSampler:
@@ -399,8 +464,17 @@ class CenteredCubeGreenSampler:
         self.cell_probabilities = _centered_cube_face_probabilities(grid_size, series_terms)
         self.flat_probabilities = np.tile(self.cell_probabilities.ravel(), 6)
         self.flat_probabilities = self.flat_probabilities / np.sum(self.flat_probabilities)
+        self._series = _CenteredCubeSeries(series_terms)
 
     def sample(self, center: np.ndarray, half_size: float, rng: np.random.Generator) -> np.ndarray:
+        return self.sample_with_weight_data(center, half_size, rng).point
+
+    def sample_with_weight_data(
+        self,
+        center: np.ndarray,
+        half_size: float,
+        rng: np.random.Generator,
+    ) -> _TransitionSample:
         flat_index = int(rng.choice(self.flat_probabilities.size, p=self.flat_probabilities))
         cells_per_face = self.grid_size * self.grid_size
         face = flat_index // cells_per_face
@@ -438,7 +512,77 @@ class CenteredCubeGreenSampler:
             point[2] += half_size
             point[0] += local_u
             point[1] += local_v
-        return point
+
+        side_length = 2.0 * half_size
+        cell_area = (side_length / self.grid_size) ** 2
+        proposal_density = float(self.cell_probabilities[i, j] / cell_area)
+        if proposal_density <= 0.0:
+            raise RuntimeError("sampled a zero-probability transition cell")
+        negative_gradient = self.negative_green_gradient(face, u, v, side_length)
+        return _TransitionSample(
+            point=point,
+            half_size=half_size,
+            proposal_density=proposal_density,
+            negative_green_gradient=negative_gradient,
+            face=face,
+        )
+
+    def pz_density_and_negative_gradient(self, u: float, v: float, side_length: float) -> tuple[float, np.ndarray]:
+        return self._series.pz_density_and_negative_gradient(u, v, side_length)
+
+    def negative_green_gradient(self, face: int, u: float, v: float, side_length: float) -> np.ndarray:
+        _, pz_negative_gradient = self.pz_density_and_negative_gradient(u, v, side_length)
+        gx, gy, gz = pz_negative_gradient
+        if face == 0:
+            return np.asarray([-gz, gx, gy], dtype=float)
+        if face == 1:
+            return np.asarray([gz, gx, gy], dtype=float)
+        if face == 2:
+            return np.asarray([gx, -gz, gy], dtype=float)
+        if face == 3:
+            return np.asarray([gx, gz, gy], dtype=float)
+        if face == 4:
+            return np.asarray([gx, gy, -gz], dtype=float)
+        if face == 5:
+            return np.asarray([gx, gy, gz], dtype=float)
+        raise ValueError("face must be in [0, 5]")
+
+
+class _CenteredCubeSeries:
+    def __init__(self, series_terms: int) -> None:
+        indices = np.arange(1, series_terms + 1, dtype=float)
+        nx, ny = np.meshgrid(indices, indices, indexing="ij")
+        nz = np.sqrt(nx * nx + ny * ny)
+        sx = np.sin(np.pi * nx / 2.0)
+        sy = np.sin(np.pi * ny / 2.0)
+        cx = np.cos(np.pi * nx / 2.0)
+        cy = np.cos(np.pi * ny / 2.0)
+        half = np.pi * nz / 2.0
+
+        self.nx = nx.ravel()
+        self.ny = ny.ravel()
+        self.density_coeff = (sx * sy / np.cosh(half)).ravel()
+        self.negative_grad_x_coeff = (nx * cx * sy / np.cosh(half)).ravel()
+        self.negative_grad_y_coeff = (ny * sx * cy / np.cosh(half)).ravel()
+        self.negative_grad_z_coeff = (nz * sx * sy / np.sinh(half)).ravel()
+
+    def pz_density_and_negative_gradient(self, u: float, v: float, side_length: float) -> tuple[float, np.ndarray]:
+        sin_u = np.sin(np.pi * self.nx * u)
+        sin_v = np.sin(np.pi * self.ny * v)
+        surface_shape = sin_u * sin_v
+
+        density_sum = float(np.sum(self.density_coeff * surface_shape))
+        grad_sum = np.asarray(
+            [
+                np.sum(self.negative_grad_x_coeff * surface_shape),
+                np.sum(self.negative_grad_y_coeff * surface_shape),
+                np.sum(self.negative_grad_z_coeff * surface_shape),
+            ],
+            dtype=float,
+        )
+        density = 2.0 * density_sum / (side_length * side_length)
+        negative_gradient = -2.0 * np.pi * grad_sum / (side_length**3)
+        return density, negative_gradient
 
 
 def _centered_cube_face_probabilities(grid_size: int, series_terms: int) -> np.ndarray:

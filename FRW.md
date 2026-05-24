@@ -4,25 +4,28 @@ This note records the intended Floating Random Walk (FRW) solver design for
 `capext`. The first target is a homogeneous dielectric with axis-aligned cuboid
 conductors, matching the current BEM problem model.
 
-## Why the prototype is still off from BEM
+## Why the prototype can still differ from BEM
 
 The current `frw.py` prototype has the right solver skeleton:
 
 - it starts from a Gaussian surface around the observation conductor;
 - it uses the largest conductor-free transition cube by default;
 - it samples a centered-cube surface Green-function PDF for potential walks;
+- it applies the first-step \(\omega\) weight from the normal derivative of the
+  surface Green function;
 - it terminates on conductors or on an artificial outer reference box;
 - it records walk statistics and representative walk traces.
 
-The main missing piece is the first-step capacitance weight. The ordinary
-potential walk uses the surface Green function as a transition PDF. Capacitance,
-however, is a flux integral, so the first transition from the Gaussian surface
-must use the normal derivative of that Green function. QuickCap, RWCap, and the
-older FRW thesis all use this field/weight formulation.
+The ordinary potential walk uses the surface Green function as a transition
+PDF. Capacitance, however, is a flux integral, so the first transition from the
+Gaussian surface must use the normal derivative of that Green function.
+QuickCap, RWCap, and the older FRW thesis all use this field/weight
+formulation.
 
-The current code still uses a low-order finite-distance Gaussian-box flux model.
-That approximation is useful for building the framework, but it is not the
-QuickCap/RWCap estimator, so a noticeable mismatch with BEM is expected.
+The implementation is still a research prototype. Differences from BEM can
+come from stochastic variance, the finite transition-cube table, the simple
+box-shaped Gaussian surface, and missing RWCap production features such as
+variance reduction and space-management acceleration.
 
 ## Physical problem
 
@@ -199,15 +202,13 @@ to the row for observation conductor \(i\), where \(h\) is the conductor hit by
 the continuation walk. If the walk reaches the outer reference boundary, the
 contribution is zero because the reference boundary is held at \(0\ \text{V}\).
 
-This is different from the current prototype contribution
+This replaces the earlier prototype contribution
 
 $$
 \frac{\epsilon A_G}{d_G}(\mathbf e_i-\mathbf e_h),
 $$
 
-which is only a finite-distance flux approximation. Replacing that expression
-with the Green-function normal-derivative weight is the next required
-correctness step.
+which was only a finite-distance flux approximation.
 
 ## Transition domains
 
@@ -334,8 +335,8 @@ $$
 
 The box must lie strictly inside the FRW outer reference boundary. Sample points
 are drawn uniformly by surface area over the six faces. For the correct
-QuickCap/RWCap estimator, these sampled points should be paired with the
-\(\omega\) weight above, not with the current finite-distance flux weight.
+QuickCap/RWCap estimator, these sampled points are paired with the \(\omega\)
+weight above.
 
 ## Outer reference boundary
 
@@ -482,21 +483,21 @@ Implemented now:
 - `FRWStatistics` records sample caps, actual walks per observation net, seed,
   transition parameters, completed walks, and escaped walks;
 - `CenteredCubeGreenSampler` tabulates the centered-cube potential PDF;
+- `CenteredCubeGreenSampler` evaluates the closed-form centered-cube
+  \(-\nabla_{\mathbf r}G_\phi\) series for the first-step \(\omega\) weight;
 - `create_solver("bem" | "frw")` selects between solver backends;
 - examples visualize conductor geometry, Gaussian surfaces, representative
   walks, and transition cubes.
 
 Still required before trusting FRW against BEM:
 
-- replace the finite-distance Gaussian-box flux contribution with
-  \(\omega=-\nabla_{\mathbf r}P\cdot n/(gP)\);
-- tabulate or evaluate the normal derivative of the first transition-domain
-  surface Green function;
-- decide whether the first step samples from \(P\) and applies \(\omega\), or
-  samples from an importance PDF proportional to
-  \(|\nabla_{\mathbf r}P\cdot n|\) and applies the corresponding signed scale;
-- validate against BEM on simple two-box examples before using FRW labels for
-  DNN training.
+- validate the \(\omega\) estimator against BEM on simple two-box and
+  one-box-to-reference examples;
+- decide whether to keep sampling the first step from the potential PDF with
+  an importance correction, or switch to a PDF proportional to
+  \(|\nabla_{\mathbf r}P\cdot n|\) with the corresponding signed scale;
+- add variance reduction and better space management;
+- establish convergence criteria before using FRW labels for DNN training.
 
 ## Important papers and implementations
 

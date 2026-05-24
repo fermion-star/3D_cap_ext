@@ -124,3 +124,25 @@ def test_centered_cube_green_sampler_is_normalized_by_face_symmetry() -> None:
 
     assert np.allclose(face_probabilities, np.full(6, 1.0 / 6.0))
     assert sampler.cell_probabilities[sampler.grid_size // 2, sampler.grid_size // 2] > sampler.cell_probabilities[0, 0]
+
+
+def test_centered_cube_green_gradient_has_expected_center_symmetry() -> None:
+    sampler = CenteredCubeGreenSampler(grid_size=21, series_terms=31)
+
+    density, negative_gradient = sampler.pz_density_and_negative_gradient(0.5, 0.5, 1.0)
+
+    assert density > 0.0
+    assert abs(negative_gradient[0]) < 1e-12
+    assert abs(negative_gradient[1]) < 1e-12
+    assert negative_gradient[2] < 0.0
+
+
+def test_centered_cube_green_gradient_maps_face_normals() -> None:
+    sampler = CenteredCubeGreenSampler(grid_size=21, series_terms=31)
+
+    negative_x = sampler.negative_green_gradient(0, 0.5, 0.5, 1.0)
+    positive_x = sampler.negative_green_gradient(1, 0.5, 0.5, 1.0)
+
+    assert negative_x[0] > 0.0
+    assert positive_x[0] < 0.0
+    assert np.allclose(negative_x[1:], positive_x[1:], atol=1e-12)

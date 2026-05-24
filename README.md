@@ -33,7 +33,8 @@ bem = create_solver("bem", max_panel_size=10.0)
 frw = create_solver("frw", samples_per_observation_net=10_000, seed=1)
 ```
 
-`FRWSolver` is currently a framework placeholder. It exposes the intended API
-and stochastic configuration, and implements a first prototype with cubic
-transition domains and a box-shaped Gaussian surface. It is useful for API and
-statistics experiments, but is not yet an RWCap-grade production FRW solver.
+`FRWSolver` implements a first stochastic FRW prototype with box-shaped
+Gaussian surfaces, maximum centered transition cubes, a tabulated cube surface
+Green-function sampler, and the closed-form first-step omega weight from the
+normal derivative of the surface Green function. It is still a research
+prototype rather than an RWCap-grade production solver.
