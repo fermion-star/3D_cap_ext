@@ -28,5 +28,6 @@ frw = create_solver("frw", samples_per_observation_net=10_000, seed=1)
 ```
 
 `FRWSolver` is currently a framework placeholder. It exposes the intended API
-and stochastic configuration, but raises `NotImplementedError` until the random
-walk transition kernel and charge estimator are implemented.
+and stochastic configuration, and implements a first prototype with cubic
+transition domains and a box-shaped Gaussian surface. It is useful for API and
+statistics experiments, but is not yet an RWCap-grade production FRW solver.

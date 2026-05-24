@@ -112,13 +112,206 @@ Common choices are:
 - precharacterized transition cube: transition probabilities and weights are
   tabulated for reuse.
 
-For the first `capext` FRW implementation, the planned order is:
+The first `capext` FRW implementation uses:
 
 1. single-dielectric axis-aligned boxes;
-2. cube or sphere transition domain selected from distance to nearest conductor;
-3. absorbing conductor hit detection;
-4. simple independent-walk statistics;
-5. later: importance sampling, stratified sampling, octree space management.
+2. a cubic transition domain centered at the current random-walk point;
+3. a discretized centered-cube surface Green-function table for the exit PDF;
+4. absorbing conductor and domain-boundary hit detection;
+5. simple independent-walk statistics.
+
+This is intentionally still a prototype. The hop PDF now follows the
+single-dielectric centered-cube Green-function series used by QuickCap-style
+FRW, but the Gaussian-surface capacitance weight is still a low-order
+finite-distance approximation rather than the full weight-value formulation.
+
+## Transition cube Green-function PDF currently used in code
+
+The current `frw.py` implementation uses the single-dielectric surface Green
+function for a cube centered at the current random-walk point. This follows the
+basic FRW relation
+
+At random-walk point \(\mathbf x\), define the cubic transition domain
+
+$$
+D(\mathbf x,a)
+=
+\left\{
+\mathbf y:\ \lVert \mathbf y-\mathbf x\rVert_\infty < a
+\right\},
+$$
+
+where the half-size is
+
+$$
+a = s\,d_\infty(\mathbf x).
+$$
+
+Here \(s=\texttt{transition\_safety}\), and \(d_\infty(\mathbf x)\) is the
+minimum \(L_\infty\) distance from \(\mathbf x\) to any conductor or domain
+boundary.
+
+For a point \(\mathbf r\) inside a closed transition surface \(S\), RWCap writes
+the potential as
+
+$$
+\phi(\mathbf r)
+=
+\oint_S P(\mathbf r,\mathbf r^{(1)})
+\phi(\mathbf r^{(1)})\,dS_{\mathbf r^{(1)}} ,
+$$
+
+where \(P(\mathbf r,\mathbf r^{(1)})\) is the surface Green function. For fixed
+\(\mathbf r\), it is a PDF on \(S\):
+
+$$
+=
+\oint_S P(\mathbf r,\mathbf r^{(1)})\,dS_{\mathbf r^{(1)}}
+=1.
+$$
+
+For the homogeneous cube, this PDF can be derived analytically and tabulated.
+Using a normalized unit cube \([0,1]^3\), source point at the center
+\((1/2,1/2,1/2)\), and the top face \(z=1\), the density used for one face is
+
+$$
+p_{\text{top}}(x,y)
+=
+\frac{4}{L^2}
+\sum_{n_x=1}^{\infty}
+\sum_{n_y=1}^{\infty}
+\sin\left(\frac{\pi n_x}{2}\right)
+\sin\left(\frac{\pi n_y}{2}\right)
+\frac{\sinh(\pi n_z/2)}{\sinh(\pi n_z)}
+\sin(\pi n_x x)
+\sin(\pi n_y y),
+$$
+
+with
+
+$$
+n_z=\sqrt{n_x^2+n_y^2}, \qquad L=1.
+$$
+
+Equivalent formulas apply to the other five faces by symmetry. Since the walk
+point is the cube center, each face integrates to \(1/6\):
+
+$$
+\int_0^1\int_0^1 p_{\text{top}}(x,y)\,dx\,dy
+=
+\frac{1}{6}.
+$$
+
+In code, `CenteredCubeGreenSampler` discretizes each face into an
+\(N\times N\) table. The probability of cell \((i,j)\) on one face is
+approximated by
+
+$$
+\Pr(i,j,\text{face})
+\approx
+p_{\text{top}}(x_i,y_j)\Delta x\Delta y,
+\qquad
+\Delta x=\Delta y=\frac{1}{N},
+$$
+
+then the table is normalized over all six faces. After a cell is selected, the
+actual point is sampled uniformly inside that small cell and mapped from the
+unit face to the physical cube face.
+
+This is very different from the earlier uniform approximation
+
+$$
+p_{\text{uniform}}(\mathbf y\mid\mathbf x)
+=
+\frac{1}{24a^2},
+$$
+
+which would choose a face uniformly and then sample uniformly on that face. The
+papers indicate that the correct FRW hop should use the surface Green-function
+PDF, not the uniform cube-surface PDF.
+
+The remaining limitation is not the hop PDF for single-dielectric centered
+cubes; it is the capacitance weight used on the first cube from the Gaussian
+surface. RWCap uses a weight value involving the gradient of the surface Green
+function:
+
+$$
+\omega(\mathbf r,\mathbf r^{(1)})
+=
+-\frac{
+\nabla_{\mathbf r}P(\mathbf r,\mathbf r^{(1)})\cdot\hat{\mathbf n}(\mathbf r)
+}{
+g\,P(\mathbf r,\mathbf r^{(1)})
+}.
+$$
+
+The current code still uses a simpler finite-distance Gaussian-box flux weight.
+
+## Gaussian surface choice
+
+For each observation net \(i\), the current implementation constructs one
+axis-aligned Gaussian box around the merged net. If the observation net's
+bounding box is
+
+$$
+[\mathbf b_{\min}, \mathbf b_{\max}],
+$$
+
+and the configured padding is \(g\), then the Gaussian box is
+
+$$
+[\mathbf b_{\min}-g\mathbf 1,\ \mathbf b_{\max}+g\mathbf 1].
+$$
+
+The box must lie strictly inside the problem domain. Sample points are drawn
+uniformly by surface area over the six faces.
+
+The present charge estimator uses a first-order finite-distance flux model:
+
+$$
+Q_i^{(k)}
+\approx
+\frac{\epsilon A_G}{g}
+\mathbb E\left[V_i^{(k)}-\phi^{(k)}(\mathbf X_G)\right],
+$$
+
+where \(A_G\) is the Gaussian-box surface area and \(\mathbf X_G\) is a uniform
+random point on that surface. Under excitation \(k\),
+
+$$
+V_i^{(k)}=
+\begin{cases}
+1, & i=k,\\
+0, & i\ne k.
+\end{cases}
+$$
+
+The potential sample is estimated by the conductor hit identity:
+
+$$
+\phi^{(k)}(\mathbf X_G)
+\approx
+\mathbf 1\{\text{walk from }\mathbf X_G\text{ hits conductor }k\}.
+$$
+
+Therefore a single walk starting from observation net \(i\)'s Gaussian surface
+contributes the vector
+
+$$
+\mathbf X_i
+=
+\frac{\epsilon A_G}{g}
+\left(\mathbf e_i-\mathbf e_h\right),
+$$
+
+where \(h\) is the hit conductor index. If the walk exits through the domain
+boundary, \(\mathbf e_h\) is omitted, corresponding to the reference boundary at
+\(0\ \text{V}\).
+
+This estimator is useful for building the solver structure and statistics, but
+the Gaussian-box finite-difference weight is still a low-order approximation.
+Later versions should replace it with the standard FRW Green-function normal
+derivative weight for the chosen Gaussian surface.
 
 ## Matrix assembly
 
@@ -221,17 +414,18 @@ should support both relative and absolute stopping thresholds.
   multi/conformal dielectric support. DOI:
   [10.1109/TCAD.2020.2968544](https://doi.org/10.1109/TCAD.2020.2968544).
 
-## First code milestone
+## Current code milestone
 
-The first code milestone is intentionally a framework, not a claimed numerical
-FRW solver:
+The current code milestone is a runnable prototype:
 
-- add `FRWSolver` with the same `solve_matrix(problem)` interface as BEM;
-- add stochastic configuration: samples, seed, tolerances;
-- add result/statistics dataclasses;
-- add `create_solver("bem" | "frw")` factory;
-- keep `FRWSolver.solve_matrix` raising `NotImplementedError` until the walk
-  kernel is implemented.
+- `FRWSolver.solve(problem)` returns `FRWResult`;
+- `FRWResult.capacitance` contains a Monte Carlo estimate;
+- `FRWResult.standard_error` contains per-entry independent-sample standard
+  errors for the reduced matrix;
+- `FRWStatistics` records sample count, seed, transition parameters, completed
+  walks, and escaped walks;
+- `create_solver("bem" | "frw")` selects between solver backends.
 
-This keeps the public API stable while preventing accidental use of an
-unfinished stochastic solver as if it were producing valid capacitance numbers.
+The prototype is suitable for exercising the API, studying random-walk
+statistics, and comparing qualitative trends. It should not yet be used as a
+trusted replacement for BEM labels.
