@@ -4,6 +4,26 @@ This note records the intended Floating Random Walk (FRW) solver design for
 `capext`. The first target is a homogeneous dielectric with axis-aligned cuboid
 conductors, matching the current BEM problem model.
 
+## Why the prototype is still off from BEM
+
+The current `frw.py` prototype has the right solver skeleton:
+
+- it starts from a Gaussian surface around the observation conductor;
+- it uses the largest conductor-free transition cube by default;
+- it samples a centered-cube surface Green-function PDF for potential walks;
+- it terminates on conductors or on an artificial outer reference box;
+- it records walk statistics and representative walk traces.
+
+The main missing piece is the first-step capacitance weight. The ordinary
+potential walk uses the surface Green function as a transition PDF. Capacitance,
+however, is a flux integral, so the first transition from the Gaussian surface
+must use the normal derivative of that Green function. QuickCap, RWCap, and the
+older FRW thesis all use this field/weight formulation.
+
+The current code still uses a low-order finite-distance Gaussian-box flux model.
+That approximation is useful for building the framework, but it is not the
+QuickCap/RWCap estimator, so a noticeable mismatch with BEM is expected.
+
 ## Physical problem
 
 For a homogeneous dielectric, the potential in the dielectric region satisfies
@@ -16,87 +36,178 @@ Each conductor net is an equipotential Dirichlet boundary. For the \(k\)-th
 capacitance-column experiment,
 
 $$
-\phi = 1 \quad \text{on conductor } k,
+\phi^{(k)} = 1 \quad \text{on conductor } k,
 $$
 
 and
 
 $$
-\phi = 0 \quad \text{on all other conductors and the reference boundary}.
+\phi^{(k)} = 0 \quad \text{on all other conductors and the reference boundary}.
 $$
 
-The Maxwell capacitance coefficient is
+The Maxwell capacitance coefficient is the charge on observation conductor
+\(i\):
 
 $$
 C_{ik}=Q_i^{(k)}
-=-\int_{\Gamma_i}\epsilon\frac{\partial \phi^{(k)}}{\partial n}\,dS,
+=-\int_{\Gamma_i}\epsilon
+\frac{\partial \phi^{(k)}}{\partial n}\,dS,
 $$
 
-where \(\Gamma_i\) is the surface of observation conductor \(i\), and \(n\) is
-the outward normal from the dielectric region.
+where \(\Gamma_i\) is the conductor surface and \(n\) follows the sign
+convention used by the capacitance formulation.
 
-## FRW interpretation
-
-FRW rewrites the boundary integral above as a Monte Carlo expectation. A single
-sample is a random walk that starts near an observation conductor surface and
-jumps through a sequence of local transition domains until it hits a conductor
-boundary.
-
-For a given observation conductor \(i\), a sample contributes a random variable
+In FRW we normally evaluate the same flux on a Gaussian surface \(G_i\) that
+encloses conductor \(i\) and no other conductor:
 
 $$
-X_{i}^{(k)}
+C_{ik}=Q_i^{(k)}
+=-\int_{G_i}\epsilon
+\frac{\partial \phi^{(k)}}{\partial n}\,dS.
 $$
 
-to the charge estimate under excitation \(k\). In the simplest hitting
-probability view, this contribution is proportional to an indicator:
+## Potential Green-function identity
+
+Let \(S\) be a transition-domain boundary around an interior point
+\(\mathbf r\). The FRW potential walk uses the surface Green function
+\(P(\mathbf r,\mathbf r^{(1)})\):
 
 $$
-\mathbf 1\{\text{walk terminates on conductor }k\}.
+\phi(\mathbf r)
+=
+\oint_S P(\mathbf r,\mathbf r^{(1)})
+\phi(\mathbf r^{(1)})\,dS_{\mathbf r^{(1)}} .
 $$
 
-Practical FRW capacitance solvers use a weighted formulation. The weight
-accounts for the starting surface distribution, Green's function normal
-derivative, and transition-domain exit probabilities. In abstract form:
+For fixed \(\mathbf r\), \(P\) is a PDF over \(S\):
+
+$$
+\oint_S P(\mathbf r,\mathbf r^{(1)})\,dS_{\mathbf r^{(1)}}=1.
+$$
+
+Therefore, after the first capacitance/field step has been handled, a potential
+walk can sample \(\mathbf r^{(1)}\sim P(\mathbf r,\cdot)\) and continue without
+an additional multiplicative weight for a homogeneous centered transition
+domain.
+
+## Deriving the capacitance weight
+
+Start from the Gaussian-surface charge integral for excitation \(k\):
 
 $$
 Q_i^{(k)}
-= \mathbb E[X_i^{(k)}].
+=
+-\int_{G_i}\epsilon(\mathbf r)
+\frac{\partial \phi^{(k)}(\mathbf r)}{\partial n}\,dS_{\mathbf r}.
 $$
 
-With \(M\) independent walks, the estimator is
+Insert the potential Green-function identity and differentiate with respect to
+the source point \(\mathbf r\):
 
 $$
-\widehat C_{ik}
-= \widehat Q_i^{(k)}
-= \frac{1}{M}\sum_{m=1}^M X_{i,m}^{(k)}.
+\frac{\partial \phi^{(k)}(\mathbf r)}{\partial n}
+=
+\oint_S
+\nabla_{\mathbf r}P(\mathbf r,\mathbf r^{(1)})
+\cdot \hat{\mathbf n}(\mathbf r)\,
+\phi^{(k)}(\mathbf r^{(1)})
+\,dS_{\mathbf r^{(1)}} .
 $$
 
-The sample variance is
+Then
 
 $$
-s_{ik}^2
-= \frac{1}{M-1}
-   \sum_{m=1}^M
-   \left(X_{i,m}^{(k)}-\widehat C_{ik}\right)^2,
+Q_i^{(k)}
+=
+\int_{G_i}\epsilon(\mathbf r)
+\oint_S
+\left[
+-\nabla_{\mathbf r}P(\mathbf r,\mathbf r^{(1)})
+\cdot \hat{\mathbf n}(\mathbf r)
+\right]
+\phi^{(k)}(\mathbf r^{(1)})
+\,dS_{\mathbf r^{(1)}}\,dS_{\mathbf r}.
 $$
 
-and the standard error is
+RWCap introduces a surface normalization function \(g\) on the Gaussian surface
+such that
 
 $$
-\operatorname{SE}(\widehat C_{ik})
-= \frac{s_{ik}}{\sqrt M}.
+\int_{G_i}\epsilon(\mathbf r)g(\mathbf r)\,dS_{\mathbf r}=1.
 $$
 
-A normal-approximation confidence interval is
+For homogeneous \(\epsilon\) and uniform Gaussian-surface sampling, this can be
+chosen as
 
 $$
-\widehat C_{ik}
-\pm
-z_{1-\alpha/2}\operatorname{SE}(\widehat C_{ik}).
+g=\frac{1}{\epsilon A_{G_i}},
 $$
 
-For a 95% interval, \(z_{1-\alpha/2}\approx 1.96\).
+where \(A_{G_i}\) is the area of the Gaussian surface. Multiplying and dividing
+the inner integral by \(g(\mathbf r)P(\mathbf r,\mathbf r^{(1)})\) gives the
+Monte Carlo form
+
+$$
+Q_i^{(k)}
+=
+\mathbb E\left[
+\omega(\mathbf r,\mathbf r^{(1)})
+\phi^{(k)}(\mathbf r^{(1)})
+\right],
+$$
+
+where \(\mathbf r\) is sampled from the Gaussian-surface density
+\(\epsilon g\), \(\mathbf r^{(1)}\) is sampled from
+\(P(\mathbf r,\cdot)\), and the capacitance weight is
+
+$$
+\boxed{
+\omega(\mathbf r,\mathbf r^{(1)})
+=
+-\frac{
+\nabla_{\mathbf r}P(\mathbf r,\mathbf r^{(1)})
+\cdot \hat{\mathbf n}(\mathbf r)
+}{
+g(\mathbf r)P(\mathbf r,\mathbf r^{(1)})
+}
+}.
+$$
+
+This is the \(\omega\) formula used in the RWCap derivation. QuickCap states
+the same idea in electric-field form: after choosing a point on the Gaussian
+surface, the first random step estimates the normal electric field using the
+normal component of the electric-field Green function, equivalently the normal
+derivative of the surface Green function.
+
+After \(\mathbf r^{(1)}\) is sampled, the rest of the walk estimates
+\(\phi^{(k)}(\mathbf r^{(1)})\). With conductor boundary values 0 or 1,
+
+$$
+\phi^{(k)}(\mathbf r^{(1)})
+=
+\Pr\{\text{potential walk from }\mathbf r^{(1)}
+\text{ hits conductor }k\}.
+$$
+
+So one completed walk contributes
+
+$$
+\omega(\mathbf r,\mathbf r^{(1)})\,\mathbf e_h
+$$
+
+to the row for observation conductor \(i\), where \(h\) is the conductor hit by
+the continuation walk. If the walk reaches the outer reference boundary, the
+contribution is zero because the reference boundary is held at \(0\ \text{V}\).
+
+This is different from the current prototype contribution
+
+$$
+\frac{\epsilon A_G}{d_G}(\mathbf e_i-\mathbf e_h),
+$$
+
+which is only a finite-distance flux approximation. Replacing that expression
+with the Green-function normal-derivative weight is the next required
+correctness step.
 
 ## Transition domains
 
@@ -112,23 +223,10 @@ Common choices are:
 - precharacterized transition cube: transition probabilities and weights are
   tabulated for reuse.
 
-The first `capext` FRW implementation uses:
+The first `capext` FRW implementation uses the largest cubic transition domain
+centered at the current random-walk point.
 
-1. single-dielectric axis-aligned boxes;
-2. the largest cubic transition domain centered at the current random-walk
-   point;
-3. a discretized centered-cube surface Green-function table for the exit PDF;
-4. absorbing conductor and outer-reference-boundary hit detection;
-5. independent-walk statistics with optional error-based stopping.
-
-This is intentionally still a prototype. The hop PDF now follows the
-single-dielectric centered-cube Green-function series used by QuickCap-style
-FRW, but the Gaussian-surface capacitance weight is still a low-order
-finite-distance approximation rather than the full weight-value formulation.
-
-## Transition cube Green-function PDF currently used in code
-
-At random-walk point \(\mathbf x\), define the cubic transition domain
+At random-walk point \(\mathbf x\), define
 
 $$
 D(\mathbf x,a)
@@ -138,10 +236,10 @@ D(\mathbf x,a)
 \right\},
 $$
 
-where the half-size is
+where
 
 $$
-a = s\,d_\infty(\mathbf x).
+a=s\,d_\infty(\mathbf x).
 $$
 
 Here \(s=\texttt{transition\_safety}\), and \(d_\infty(\mathbf x)\) is the
@@ -153,78 +251,14 @@ s=1,
 $$
 
 so the code uses the maximum conductor-free transition cube, matching the
-QuickCap/RWCap description. Smaller values of \(s\) can be used only as a
+QuickCap/RWCap description. Smaller values of \(s\) are only a
 debugging/robustness knob.
 
-## Outer reference boundary
-
-The random walk must eventually terminate. For the current free-space prototype,
-`FRWSolver` constructs an artificial outer reference box rather than using
-`CapacitanceProblem.domain`. The problem domain remains a geometry-validity
-constraint; the FRW outer box is the absorbing reference boundary.
-
-Let the bounding box of all conductor geometry be
-
-$$
-[\mathbf g_{\min}, \mathbf g_{\max}],
-$$
-
-with center
-
-$$
-\mathbf g_c=\frac{\mathbf g_{\min}+\mathbf g_{\max}}{2},
-$$
-
-and largest geometry dimension
-
-$$
-L_g=\max_\alpha (g_{\max,\alpha}-g_{\min,\alpha}).
-$$
-
-For `outer_box_scale = s_o`, the outer reference boundary is the cube
-
-$$
-\left[
-\mathbf g_c-\frac{s_oL_g}{2}\mathbf 1,\,
-\mathbf g_c+\frac{s_oL_g}{2}\mathbf 1
-\right].
-$$
-
-The default is
-
-$$
-s_o=20.
-$$
-
-If a walk reaches this outer boundary before hitting a conductor, it terminates
-on the reference node at \(0\ \text{V}\).
-
-The Gaussian boxes must lie inside this outer reference boundary.
+## Centered-cube potential PDF used in code
 
 The current `frw.py` implementation uses the single-dielectric surface Green
-function for a cube centered at the current random-walk point. This follows the
-basic FRW relation
-
-For a point \(\mathbf r\) inside a closed transition surface \(S\), RWCap writes
-the potential as
-
-$$
-\phi(\mathbf r)
-=
-\oint_S P(\mathbf r,\mathbf r^{(1)})
-\phi(\mathbf r^{(1)})\,dS_{\mathbf r^{(1)}} ,
-$$
-
-where \(P(\mathbf r,\mathbf r^{(1)})\) is the surface Green function. For fixed
-\(\mathbf r\), it is a PDF on \(S\):
-
-$$
-\oint_S P(\mathbf r,\mathbf r^{(1)})\,dS_{\mathbf r^{(1)}}
-=1.
-$$
-
-For the homogeneous cube, this PDF can be derived analytically and tabulated.
-Using a normalized unit cube \([0,1]^3\), source point at the center
+function for a cube centered at the current random-walk point. Using a
+normalized unit cube \([0,1]^3\), source point at the center
 \((1/2,1/2,1/2)\), and the top face \(z=1\), the density used for one face is
 
 $$
@@ -271,36 +305,18 @@ then the table is normalized over all six faces. After a cell is selected, the
 actual point is sampled uniformly inside that small cell and mapped from the
 unit face to the physical cube face.
 
-This is very different from the earlier uniform approximation
+This is very different from a uniform cube-surface approximation
 
 $$
 p_{\text{uniform}}(\mathbf y\mid\mathbf x)
 =
-\frac{1}{24a^2},
+\frac{1}{24a^2}.
 $$
 
-which would choose a face uniformly and then sample uniformly on that face. The
-papers indicate that the correct FRW hop should use the surface Green-function
-PDF, not the uniform cube-surface PDF.
+The papers indicate that the correct potential hop should use the surface
+Green-function PDF, not the uniform cube-surface PDF.
 
-The remaining limitation is not the hop PDF for single-dielectric centered
-cubes; it is the capacitance weight used on the first cube from the Gaussian
-surface. RWCap uses a weight value involving the gradient of the surface Green
-function:
-
-$$
-\omega(\mathbf r,\mathbf r^{(1)})
-=
--\frac{
-\nabla_{\mathbf r}P(\mathbf r,\mathbf r^{(1)})\cdot\hat{\mathbf n}(\mathbf r)
-}{
-g\,P(\mathbf r,\mathbf r^{(1)})
-}.
-$$
-
-The current code still uses a simpler finite-distance Gaussian-box flux weight.
-
-## Gaussian surface choice
+## Gaussian surface choice in code
 
 For each observation net \(i\), the current implementation constructs one
 axis-aligned Gaussian box around the merged net. If the observation net's
@@ -310,84 +326,89 @@ $$
 [\mathbf b_{\min}, \mathbf b_{\max}],
 $$
 
-and the configured padding is \(g\), then the Gaussian box is
+and the configured padding is \(d_G\), then the Gaussian box is
 
 $$
-[\mathbf b_{\min}-g\mathbf 1,\ \mathbf b_{\max}+g\mathbf 1].
+[\mathbf b_{\min}-d_G\mathbf 1,\ \mathbf b_{\max}+d_G\mathbf 1].
 $$
 
 The box must lie strictly inside the FRW outer reference boundary. Sample points
-are drawn uniformly by surface area over the six faces.
+are drawn uniformly by surface area over the six faces. For the correct
+QuickCap/RWCap estimator, these sampled points should be paired with the
+\(\omega\) weight above, not with the current finite-distance flux weight.
 
-The present charge estimator uses a first-order finite-distance flux model:
+## Outer reference boundary
 
-$$
-Q_i^{(k)}
-\approx
-\frac{\epsilon A_G}{g}
-\mathbb E\left[V_i^{(k)}-\phi^{(k)}(\mathbf X_G)\right],
-$$
+The random walk must eventually terminate. For the current free-space prototype,
+`FRWSolver` constructs an artificial outer reference box rather than using
+`CapacitanceProblem.domain`. The problem domain remains a geometry-validity
+constraint; the FRW outer box is the absorbing reference boundary.
 
-where \(A_G\) is the Gaussian-box surface area and \(\mathbf X_G\) is a uniform
-random point on that surface. Under excitation \(k\),
-
-$$
-V_i^{(k)}=
-\begin{cases}
-1, & i=k,\\
-0, & i\ne k.
-\end{cases}
-$$
-
-The potential sample is estimated by the conductor hit identity:
+Let the bounding box of all conductor geometry be
 
 $$
-\phi^{(k)}(\mathbf X_G)
-\approx
-\mathbf 1\{\text{walk from }\mathbf X_G\text{ hits conductor }k\}.
+[\mathbf g_{\min}, \mathbf g_{\max}],
 $$
 
-Therefore a single walk starting from observation net \(i\)'s Gaussian surface
-contributes the vector
+with center
 
 $$
-\mathbf X_i
-=
-\frac{\epsilon A_G}{g}
-\left(\mathbf e_i-\mathbf e_h\right),
+\mathbf g_c=\frac{\mathbf g_{\min}+\mathbf g_{\max}}{2},
 $$
 
-where \(h\) is the hit conductor index. If the walk exits through the FRW outer
-reference boundary, \(\mathbf e_h\) is omitted, corresponding to the reference
-boundary at \(0\ \text{V}\).
+and largest geometry dimension
 
-This estimator is useful for building the solver structure and statistics, but
-the Gaussian-box finite-difference weight is still a low-order approximation.
-Later versions should replace it with the standard FRW Green-function normal
-derivative weight for the chosen Gaussian surface.
+$$
+L_g=\max_\alpha (g_{\max,\alpha}-g_{\min,\alpha}).
+$$
+
+For `outer_box_scale = s_o`, the outer reference boundary is the cube
+
+$$
+\left[
+\mathbf g_c-\frac{s_oL_g}{2}\mathbf 1,\,
+\mathbf g_c+\frac{s_oL_g}{2}\mathbf 1
+\right].
+$$
+
+The default is
+
+$$
+s_o=20.
+$$
+
+If a walk reaches this outer boundary before hitting a conductor, it terminates
+on the reference node at \(0\ \text{V}\). The Gaussian boxes must lie inside
+this outer reference boundary.
 
 ## Matrix assembly
 
-FRW can estimate one row or one column at a time depending on the chosen
-formulation. For our software interface, the solver should still return a
-matrix satisfying
+FRW estimates one observation row at a time in the Gaussian-surface flux
+formulation. For observation conductor \(i\), each completed walk produces a
+random vector \(\mathbf X_i\), and
 
 $$
-\mathbf Q = \mathbf C\mathbf V.
+\widehat{\mathbf C}_{i,:}
+=
+\frac{1}{M_i}\sum_{m=1}^{M_i}\mathbf X_{i,m}.
 $$
 
-The FRW solver keeps the same public API as BEM:
+With the correct Green-function weight,
 
-```python
-solver.solve_matrix(problem)
-```
+$$
+\mathbf X_{i,m}
+=
+\omega(\mathbf r_m,\mathbf r_m^{(1)})\mathbf e_{h_m},
+$$
 
-and returns:
+where \(h_m\) is the conductor hit by the continuation walk. The reference
+boundary contributes zero.
 
-- capacitance estimate \(\widehat{\mathbf C}\);
-- per-entry standard errors;
-- number of walks;
-- random seed and stopping criteria.
+The public solver API still returns a matrix satisfying
+
+$$
+\mathbf Q=\mathbf C\mathbf V.
+$$
 
 As with BEM, the free-space reduced matrix may be augmented with an analytic
 reference node so that
@@ -404,17 +425,34 @@ actual number of walks. For each observation net, it runs at least
 `min_samples_per_observation_net` walks, then checks the estimated error every
 `check_interval` walks.
 
-The relative standard error target is:
+For a row entry \(C_{ik}\), the sample variance is
 
 $$
-\frac{\operatorname{SE}(\widehat C_{ik})}{|\widehat C_{ik}|}
-< \tau;
+s_{ik}^2
+=
+\frac{1}{M_i-1}
+\sum_{m=1}^{M_i}
+\left(X_{i,m}^{(k)}-\widehat C_{ik}\right)^2,
 $$
 
-The absolute standard error target is:
+and the standard error is
 
 $$
-\operatorname{SE}(\widehat C_{ik}) < \eta.
+\operatorname{SE}(\widehat C_{ik})
+=
+\frac{s_{ik}}{\sqrt{M_i}}.
+$$
+
+The relative standard error target is
+
+$$
+\frac{\operatorname{SE}(\widehat C_{ik})}{|\widehat C_{ik}|}<\tau,
+$$
+
+and the absolute standard error target is
+
+$$
+\operatorname{SE}(\widehat C_{ik})<\eta.
 $$
 
 For small coupling coefficients, relative error can be unstable, so the solver
@@ -433,66 +471,53 @@ using only the terms whose tolerances are configured. If neither tolerance is
 set, the solver performs the full `samples_per_observation_net` walks. The
 maximum cap is retained to prevent no-stop situations.
 
-## Important papers and implementations
+## Implementation checklist
 
-- Ralph B. Iverson and Yannick L. Le Coz, "A floating random-walk algorithm for
-  extracting electrical capacitance," Mathematics and Computers in Simulation,
-  55(1-3), 59-66, 2001. This is the QuickCap theory paper and describes FRW as
-  Monte Carlo integration where one sample corresponds to one floating random
-  walk. DOI:
-  [10.1016/S0378-4754(00)00246-9](https://doi.org/10.1016/S0378-4754(00)00246-9).
-
-- Yannick L. Le Coz and Ralph B. Iverson, "A stochastic algorithm for high speed
-  capacitance extraction in integrated circuits," Solid-State Electronics,
-  1992. This is an early QuickCap-era FRW paper. Publisher page:
-  [ScienceDirect](https://www.sciencedirect.com/science/article/abs/pii/0038110192903327).
-
-- Yannick L. Le Coz, Ralph B. Iverson, et al., "Performance of random-walk
-  capacitance extractors for IC interconnects: A numerical study,"
-  Solid-State Electronics, 1998. This paper compares random-walk capacitance
-  extraction against analytical, deterministic, and experimental references.
-  Publisher page:
-  [ScienceDirect](https://www.sciencedirect.com/science/article/abs/pii/S0038110197002839).
-
-- Wenjian Yu, Hao Zhuang, Chao Zhang, Gang Hu, and Zhi Liu, "RWCap: A Floating
-  Random Walk Solver for 3-D Capacitance Extraction of Very-Large-Scale
-  Integration Interconnects," IEEE TCAD, 32(3), 353-366, 2013. This is the
-  central RWCap paper; it includes multi-dielectric transition probability /
-  weight characterization, variance reduction, octree space management, and
-  parallelism. DOI:
-  [10.1109/TCAD.2012.2224346](https://doi.org/10.1109/TCAD.2012.2224346).
-  Open PDF:
-  [Tsinghua NUMBDA](https://numbda.cs.tsinghua.edu.cn/papers/tcad13.pdf).
-
-- Wenjian Yu and Xiren Wang, "Fast Floating Random Walk Method for Capacitance
-  Extraction," in Advanced Field-Solver Techniques for RC Extraction of
-  Integrated Circuits, Springer, 2014. This book chapter is a useful survey of
-  FRW techniques and acceleration ideas. DOI:
-  [10.1007/978-3-642-54298-5_10](https://doi.org/10.1007/978-3-642-54298-5_10).
-
-- RWCap project pages from Wenjian Yu's group provide practical solver context
-  and lists of related publications:
-  [RWCap v1/v2](https://numbda.cs.tsinghua.edu.cn/download/RWCap_v1_en.html),
-  [RWCap v4](https://numbda.cs.tsinghua.edu.cn/download/RWCap_v4_en.html).
-
-- Ming Yang and Wenjian Yu, "Floating Random Walk Capacitance Solver Tackling
-  Conformal Dielectric with On-the-Fly Sampling on Eight-Octant Transition
-  Cubes," IEEE TCAD, 39(12), 4935-4943, 2020. This is important for later
-  multi/conformal dielectric support. DOI:
-  [10.1109/TCAD.2020.2968544](https://doi.org/10.1109/TCAD.2020.2968544).
-
-## Current code milestone
-
-The current code milestone is a runnable prototype:
+Implemented now:
 
 - `FRWSolver.solve(problem)` returns `FRWResult`;
 - `FRWResult.capacitance` contains a Monte Carlo estimate;
 - `FRWResult.standard_error` contains per-entry independent-sample standard
   errors for the reduced matrix;
-- `FRWStatistics` records max sample count, actual walks per observation net,
-  seed, transition parameters, completed walks, and escaped walks;
-- `create_solver("bem" | "frw")` selects between solver backends.
+- `FRWStatistics` records sample caps, actual walks per observation net, seed,
+  transition parameters, completed walks, and escaped walks;
+- `CenteredCubeGreenSampler` tabulates the centered-cube potential PDF;
+- `create_solver("bem" | "frw")` selects between solver backends;
+- examples visualize conductor geometry, Gaussian surfaces, representative
+  walks, and transition cubes.
 
-The prototype is suitable for exercising the API, studying random-walk
-statistics, and comparing qualitative trends. It should not yet be used as a
-trusted replacement for BEM labels.
+Still required before trusting FRW against BEM:
+
+- replace the finite-distance Gaussian-box flux contribution with
+  \(\omega=-\nabla_{\mathbf r}P\cdot n/(gP)\);
+- tabulate or evaluate the normal derivative of the first transition-domain
+  surface Green function;
+- decide whether the first step samples from \(P\) and applies \(\omega\), or
+  samples from an importance PDF proportional to
+  \(|\nabla_{\mathbf r}P\cdot n|\) and applies the corresponding signed scale;
+- validate against BEM on simple two-box examples before using FRW labels for
+  DNN training.
+
+## Important papers and implementations
+
+- `ref/00 BachelorThesis_FRW_and_Space_Management_NianlongGu.pdf`: thesis
+  notes on FRW and space management. Useful for the Gaussian-surface charge
+  integral and practical implementation details.
+
+- `ref/06 A floating random-walk algorithm for extracting electrical capacitance.pdf`:
+  the QuickCap theory paper. It describes the field/weight first step from a
+  Gaussian surface and the subsequent potential random walk.
+
+- `ref/08 RWCap_A_Floating_Random_Walk_Solver_for_3-D_Capacitance_Extraction_of_Very-Large-Scale_Integration_Interconnects.pdf`:
+  the central RWCap paper. It states the \(\omega\) weight in terms of the
+  gradient of the surface Green function and adds modern acceleration machinery.
+
+- Ralph B. Iverson and Yannick L. Le Coz, "A floating random-walk algorithm for
+  extracting electrical capacitance," Mathematics and Computers in Simulation,
+  55(1-3), 59-66, 2001. DOI:
+  [10.1016/S0378-4754(00)00246-9](https://doi.org/10.1016/S0378-4754(00)00246-9).
+
+- Wenjian Yu, Hao Zhuang, Chao Zhang, Gang Hu, and Zhi Liu, "RWCap: A Floating
+  Random Walk Solver for 3-D Capacitance Extraction of Very-Large-Scale
+  Integration Interconnects," IEEE TCAD, 32(3), 353-366, 2013. DOI:
+  [10.1109/TCAD.2012.2224346](https://doi.org/10.1109/TCAD.2012.2224346).

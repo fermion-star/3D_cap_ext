@@ -84,7 +84,23 @@ capacitance matrix estimate [F]:
 [[ 1.360003e-08 -2.146255e-09 -1.145378e-08]
  [-2.146255e-09  9.299022e-09 -7.152767e-09]
  [-1.145378e-08 -7.152767e-09  1.860654e-08]]
+
 standard error estimate [F]:
 [[4.434177e-10 1.966186e-10          nan]
  [1.966186e-10 3.389768e-10          nan]
  [         nan          nan          nan]]
+
+## Prototype 02 result
+capacitance matrix estimate [F]:
+[[ 1.160438e-08 -3.418486e-09 -8.185889e-09]
+ [-2.491160e-09  8.277712e-09 -5.786552e-09]
+ [-9.113216e-09 -4.859226e-09  1.397244e-08]]
+standard error estimate [F]:
+[[2.792083e-10 1.704400e-10          nan]
+ [1.228733e-10 2.023721e-10          nan]
+ [         nan          nan          nan]]
+row sums [F]:
+[0. 0. 0.]
+statistics:
+FRWStatistics(max_samples_per_observation_net=20000, min_samples_per_observation_net=200, check_interval=200, seed=2, relative_tolerance=0.05, absolute_tolerance=1e-12, gaussian_padding=10.0, outer_box_scale=20.0, transition_safety=1.0, transition_grid_size=31, transition_series_terms=41, hit_tolerance=1e-06, max_steps_per_walk=5000, walks_per_observation_net=(4600, 5200), completed_walks=9800, escaped_walks=0)
+walks per observation net: (4600, 5200)
