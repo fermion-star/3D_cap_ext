@@ -69,12 +69,14 @@ class DenseBEMSolver(CapacitanceSolver):
             point_approximation_ratio=self.point_approximation_ratio,
             multipole_order=self.multipole_order,
         )
+        print(f"influence matrix size: {influence.shape}")
         panel_net_indices = np.asarray([panel.net_index for panel in panels], dtype=int)
         panel_areas = np.asarray([panel.area for panel in panels], dtype=float)
 
         net_count = len(nets)
         panel_to_net = np.eye(net_count, dtype=float)[panel_net_indices]
         sigma = np.linalg.solve(influence, panel_to_net)
+
         capacitance = panel_to_net.T @ (sigma * panel_areas[:, np.newaxis])
 
         if self.symmetrize:

@@ -9,7 +9,7 @@ from capext.solvers import DenseBEMSolver
 
 
 def main() -> None:
-    max_panel_size = 20.0
+    max_panel_size = 5.0
     problem = CapacitanceProblem.from_boxes(
         [
             ("left", (100.0, 220.0, 220.0), (160.0, 280.0, 280.0)),
