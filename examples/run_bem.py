@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from draw_run_bem_geometry import count_bem_unknowns, draw, draw_discretization
+from draw_geometry import count_bem_unknowns, draw, draw_discretization
 
 from capext.problem import CapacitanceProblem
 from capext.solvers import DenseBEMSolver

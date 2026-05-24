@@ -12,18 +12,35 @@ from capext.solvers.base import CapacitanceSolver
 
 @dataclass(frozen=True)
 class FRWStatistics:
-    samples_per_observation_net: int
+    max_samples_per_observation_net: int
+    min_samples_per_observation_net: int
+    check_interval: int
     seed: int | None
     relative_tolerance: float | None
     absolute_tolerance: float | None
     gaussian_padding: float
+    outer_box_scale: float
     transition_safety: float
     transition_grid_size: int
     transition_series_terms: int
     hit_tolerance: float
     max_steps_per_walk: int
+    walks_per_observation_net: tuple[int, ...]
     completed_walks: int
     escaped_walks: int
+
+    @property
+    def total_walks(self) -> int:
+        return self.completed_walks + self.escaped_walks
+
+
+@dataclass(frozen=True)
+class FRWWalkTrace:
+    observation_net_index: int
+    hit_net_index: int | None
+    points: np.ndarray
+    transition_boxes: tuple[AxisAlignedBox, ...]
+    escaped: bool
 
 
 @dataclass(frozen=True)
@@ -32,6 +49,7 @@ class FRWResult:
     standard_error: np.ndarray
     net_names: tuple[str, ...]
     statistics: FRWStatistics
+    representative_walks: tuple[FRWWalkTrace, ...] = ()
     reference_net_index: int | None = None
 
     @property
@@ -55,29 +73,40 @@ class FRWSolver(CapacitanceSolver):
         self,
         *,
         samples_per_observation_net: int = 10_000,
+        min_samples_per_observation_net: int = 30,
+        check_interval: int = 100,
         seed: int | None = None,
         relative_tolerance: float | None = None,
         absolute_tolerance: float | None = None,
         add_reference_node: bool = False,
         reference_name: str = "enclosure",
         gaussian_padding: float = 5.0,
-        transition_safety: float = 0.95,
+        outer_box_scale: float = 20.0,
+        transition_safety: float = 1.0,
         transition_grid_size: int = 31,
         transition_series_terms: int = 41,
         hit_tolerance: float = 1e-6,
         max_steps_per_walk: int = 10_000,
-        symmetrize: bool = True,
+        symmetrize: bool = False,  # yifan set to false until the whole thing is perfect
     ) -> None:
         if samples_per_observation_net <= 0:
             raise ValueError("samples_per_observation_net must be positive")
+        if min_samples_per_observation_net <= 1:
+            raise ValueError("min_samples_per_observation_net must be greater than 1")
+        if min_samples_per_observation_net > samples_per_observation_net:
+            raise ValueError("min_samples_per_observation_net must not exceed samples_per_observation_net")
+        if check_interval <= 0:
+            raise ValueError("check_interval must be positive")
         if relative_tolerance is not None and relative_tolerance <= 0:
             raise ValueError("relative_tolerance must be positive when provided")
         if absolute_tolerance is not None and absolute_tolerance <= 0:
             raise ValueError("absolute_tolerance must be positive when provided")
         if gaussian_padding <= 0:
             raise ValueError("gaussian_padding must be positive")
-        if not 0 < transition_safety < 1:
-            raise ValueError("transition_safety must be between 0 and 1")
+        if outer_box_scale <= 1:
+            raise ValueError("outer_box_scale must be greater than 1")
+        if not 0 < transition_safety <= 1:
+            raise ValueError("transition_safety must be in (0, 1]")
         if transition_grid_size <= 0:
             raise ValueError("transition_grid_size must be positive")
         if transition_series_terms <= 0:
@@ -88,12 +117,15 @@ class FRWSolver(CapacitanceSolver):
             raise ValueError("max_steps_per_walk must be positive")
 
         self.samples_per_observation_net = samples_per_observation_net
+        self.min_samples_per_observation_net = min_samples_per_observation_net
+        self.check_interval = check_interval
         self.seed = seed
         self.relative_tolerance = relative_tolerance
         self.absolute_tolerance = absolute_tolerance
         self.add_reference_node = add_reference_node
         self.reference_name = reference_name
         self.gaussian_padding = gaussian_padding
+        self.outer_box_scale = outer_box_scale
         self.transition_safety = transition_safety
         self.transition_grid_size = transition_grid_size
         self.transition_series_terms = transition_series_terms
@@ -107,19 +139,24 @@ class FRWSolver(CapacitanceSolver):
         )
         self._completed_walks = 0
         self._escaped_walks = 0
+        self._walks_per_observation_net: tuple[int, ...] = ()
 
     def statistics(self) -> FRWStatistics:
         return FRWStatistics(
-            samples_per_observation_net=self.samples_per_observation_net,
+            max_samples_per_observation_net=self.samples_per_observation_net,
+            min_samples_per_observation_net=self.min_samples_per_observation_net,
+            check_interval=self.check_interval,
             seed=self.seed,
             relative_tolerance=self.relative_tolerance,
             absolute_tolerance=self.absolute_tolerance,
             gaussian_padding=self.gaussian_padding,
+            outer_box_scale=self.outer_box_scale,
             transition_safety=self.transition_safety,
             transition_grid_size=self.transition_grid_size,
             transition_series_terms=self.transition_series_terms,
             hit_tolerance=self.hit_tolerance,
             max_steps_per_walk=self.max_steps_per_walk,
+            walks_per_observation_net=self._walks_per_observation_net,
             completed_walks=self._completed_walks,
             escaped_walks=self._escaped_walks,
         )
@@ -130,27 +167,54 @@ class FRWSolver(CapacitanceSolver):
         net_names = tuple(net.name for net in nets)
         reduced = np.zeros((net_count, net_count), dtype=float)
         standard_error = np.zeros((net_count, net_count), dtype=float)
+        representative_walks: list[FRWWalkTrace] = []
+        walks_per_observation_net = []
         self._completed_walks = 0
         self._escaped_walks = 0
+        outer_boundary = self.outer_boundary_box(problem)
 
         for observation_net_index, net in enumerate(nets):
             gaussian_box = self.gaussian_box(problem, net)
             gaussian_area = _box_surface_area(gaussian_box)
             flux_weight = problem.epsilon * gaussian_area / self.gaussian_padding
-            samples = np.zeros((self.samples_per_observation_net, net_count), dtype=float)
+            samples = []
 
             for sample_index in range(self.samples_per_observation_net):
                 start = _sample_box_surface(gaussian_box, self.rng)
-                hit_net = self._walk_to_boundary(start, problem, nets)
-                if hit_net is not None:
-                    samples[sample_index, hit_net] -= flux_weight
-                samples[sample_index, observation_net_index] += flux_weight
-
-            reduced[observation_net_index, :] = np.mean(samples, axis=0)
-            if self.samples_per_observation_net > 1:
-                standard_error[observation_net_index, :] = np.std(samples, axis=0, ddof=1) / np.sqrt(
-                    self.samples_per_observation_net
+                record_trace = sample_index == 0
+                walk = self._walk_to_boundary(
+                    start,
+                    outer_boundary,
+                    nets,
+                    record_trace=record_trace,
                 )
+                hit_net = walk.hit_net_index
+                if record_trace:
+                    representative_walks.append(
+                        FRWWalkTrace(
+                            observation_net_index=observation_net_index,
+                            hit_net_index=walk.hit_net_index,
+                            points=np.asarray(walk.points, dtype=float),
+                            transition_boxes=walk.transition_boxes,
+                            escaped=walk.escaped,
+                        )
+                    )
+                sample = np.zeros(net_count, dtype=float)
+                if hit_net is not None:
+                    sample[hit_net] -= flux_weight
+                sample[observation_net_index] += flux_weight
+                samples.append(sample)
+
+                current_samples = np.asarray(samples)
+                if self._can_stop_sampling(current_samples):
+                    break
+
+            sample_matrix = np.asarray(samples)
+            walks_per_observation_net.append(sample_matrix.shape[0])
+            reduced[observation_net_index, :] = np.mean(samples, axis=0)
+            standard_error[observation_net_index, :] = _standard_error(sample_matrix)
+
+        self._walks_per_observation_net = tuple(walks_per_observation_net)
 
         if self.symmetrize:
             reduced = 0.5 * (reduced + reduced.T)
@@ -169,60 +233,121 @@ class FRWSolver(CapacitanceSolver):
             standard_error=standard_error,
             net_names=net_names,
             statistics=self.statistics(),
+            representative_walks=tuple(representative_walks),
             reference_net_index=reference_net_index,
         )
 
     def solve_matrix(self, problem: CapacitanceProblem) -> np.ndarray:
         return self.solve(problem).capacitance
 
+    def _can_stop_sampling(self, samples: np.ndarray) -> bool:
+        sample_count = samples.shape[0]
+        if sample_count < self.min_samples_per_observation_net:
+            return False
+        if sample_count == self.samples_per_observation_net:
+            return True
+        if self.relative_tolerance is None and self.absolute_tolerance is None:
+            return False
+        if sample_count % self.check_interval != 0:
+            return False
+
+        mean = np.mean(samples, axis=0)
+        standard_error = _standard_error(samples)
+        target = np.zeros_like(mean)
+        if self.absolute_tolerance is not None:
+            target = np.maximum(target, self.absolute_tolerance)
+        if self.relative_tolerance is not None:
+            target = np.maximum(target, self.relative_tolerance * np.abs(mean))
+        return bool(np.all(standard_error <= target))
+
     def gaussian_box(self, problem: CapacitanceProblem, net: NetConductor) -> AxisAlignedBox:
         mins = np.min(np.vstack([conductor.box.min_array for conductor in net.boxes]), axis=0)
         maxs = np.max(np.vstack([conductor.box.max_array for conductor in net.boxes]), axis=0)
         lo = mins - self.gaussian_padding
         hi = maxs + self.gaussian_padding
-        domain_lo = problem.domain.min_array
-        domain_hi = problem.domain.max_array
-        if np.any(lo <= domain_lo) or np.any(hi >= domain_hi):
+        outer = self.outer_boundary_box(problem)
+        outer_lo = outer.min_array
+        outer_hi = outer.max_array
+        if np.any(lo <= outer_lo) or np.any(hi >= outer_hi):
             raise ValueError(
-                f"gaussian_padding={self.gaussian_padding} places the Gaussian box outside the domain"
+                f"gaussian_padding={self.gaussian_padding} places the Gaussian box outside the FRW outer boundary"
             )
+        return AxisAlignedBox(tuple(lo), tuple(hi))
+
+    def outer_boundary_box(self, problem: CapacitanceProblem) -> AxisAlignedBox:
+        boxes = [conductor.box for conductor in problem.conductors]
+        mins = np.min(np.vstack([box.min_array for box in boxes]), axis=0)
+        maxs = np.max(np.vstack([box.max_array for box in boxes]), axis=0)
+        center = 0.5 * (mins + maxs)
+        max_dimension = float(np.max(maxs - mins))
+        half_size = 0.5 * self.outer_box_scale * max_dimension
+        lo = center - half_size
+        hi = center + half_size
         return AxisAlignedBox(tuple(lo), tuple(hi))
 
     def _walk_to_boundary(
         self,
         start: np.ndarray,
-        problem: CapacitanceProblem,
+        outer_boundary: AxisAlignedBox,
         nets: list[NetConductor],
-    ) -> int | None:
+        *,
+        record_trace: bool = False,
+    ) -> _WalkOutcome:
         point = np.asarray(start, dtype=float)
+        points = [point.copy()] if record_trace else []
+        transition_boxes = [] if record_trace else []
 
         for _ in range(self.max_steps_per_walk):
             hit_net = _containing_net(point, nets, tol=self.hit_tolerance)
             if hit_net is not None:
                 self._completed_walks += 1
-                return hit_net
+                return _WalkOutcome(hit_net, tuple(points), tuple(transition_boxes), escaped=False)
 
-            domain_distance = _distance_to_domain_boundary_linf(point, problem.domain)
+            domain_distance = _distance_to_domain_boundary_linf(point, outer_boundary)
             conductor_distance, nearest_net = _nearest_conductor_linf(point, nets)
             nearest_distance = min(domain_distance, conductor_distance)
 
             if nearest_distance <= self.hit_tolerance:
                 self._completed_walks += 1
                 if conductor_distance <= domain_distance:
-                    return nearest_net
-                return None
+                    return _WalkOutcome(nearest_net, tuple(points), tuple(transition_boxes), escaped=False)
+                return _WalkOutcome(None, tuple(points), tuple(transition_boxes), escaped=False)
 
             half_size = self.transition_safety * nearest_distance
+            if record_trace:
+                transition_boxes.append(_cube_box(point, half_size))
             point = self._transition_sampler.sample(point, half_size, self.rng)
+            if record_trace:
+                points.append(point.copy())
 
         self._escaped_walks += 1
-        return None
+        return _WalkOutcome(None, tuple(points), tuple(transition_boxes), escaped=True)
+
+
+@dataclass(frozen=True)
+class _WalkOutcome:
+    hit_net_index: int | None
+    points: tuple[np.ndarray, ...]
+    transition_boxes: tuple[AxisAlignedBox, ...]
+    escaped: bool
 
 
 def _augment_standard_error_shape(standard_error: np.ndarray) -> np.ndarray:
     augmented = np.full((standard_error.shape[0] + 1, standard_error.shape[1] + 1), np.nan)
     augmented[: standard_error.shape[0], : standard_error.shape[1]] = standard_error
     return augmented
+
+
+def _standard_error(samples: np.ndarray) -> np.ndarray:
+    if samples.shape[0] <= 1:
+        return np.full(samples.shape[1], np.inf)
+    return np.std(samples, axis=0, ddof=1) / np.sqrt(samples.shape[0])
+
+
+def _cube_box(center: np.ndarray, half_size: float) -> AxisAlignedBox:
+    lo = np.asarray(center, dtype=float) - half_size
+    hi = np.asarray(center, dtype=float) + half_size
+    return AxisAlignedBox(tuple(lo), tuple(hi))
 
 
 def _box_surface_area(box: AxisAlignedBox) -> float:

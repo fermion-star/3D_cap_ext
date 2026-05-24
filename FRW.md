@@ -115,10 +115,11 @@ Common choices are:
 The first `capext` FRW implementation uses:
 
 1. single-dielectric axis-aligned boxes;
-2. a cubic transition domain centered at the current random-walk point;
+2. the largest cubic transition domain centered at the current random-walk
+   point;
 3. a discretized centered-cube surface Green-function table for the exit PDF;
-4. absorbing conductor and domain-boundary hit detection;
-5. simple independent-walk statistics.
+4. absorbing conductor and outer-reference-boundary hit detection;
+5. independent-walk statistics with optional error-based stopping.
 
 This is intentionally still a prototype. The hop PDF now follows the
 single-dielectric centered-cube Green-function series used by QuickCap-style
@@ -126,10 +127,6 @@ FRW, but the Gaussian-surface capacitance weight is still a low-order
 finite-distance approximation rather than the full weight-value formulation.
 
 ## Transition cube Green-function PDF currently used in code
-
-The current `frw.py` implementation uses the single-dielectric surface Green
-function for a cube centered at the current random-walk point. This follows the
-basic FRW relation
 
 At random-walk point \(\mathbf x\), define the cubic transition domain
 
@@ -148,8 +145,65 @@ a = s\,d_\infty(\mathbf x).
 $$
 
 Here \(s=\texttt{transition\_safety}\), and \(d_\infty(\mathbf x)\) is the
-minimum \(L_\infty\) distance from \(\mathbf x\) to any conductor or domain
-boundary.
+minimum \(L_\infty\) distance from \(\mathbf x\) to any conductor or the FRW
+outer boundary. By default,
+
+$$
+s=1,
+$$
+
+so the code uses the maximum conductor-free transition cube, matching the
+QuickCap/RWCap description. Smaller values of \(s\) can be used only as a
+debugging/robustness knob.
+
+## Outer reference boundary
+
+The random walk must eventually terminate. For the current free-space prototype,
+`FRWSolver` constructs an artificial outer reference box rather than using
+`CapacitanceProblem.domain`. The problem domain remains a geometry-validity
+constraint; the FRW outer box is the absorbing reference boundary.
+
+Let the bounding box of all conductor geometry be
+
+$$
+[\mathbf g_{\min}, \mathbf g_{\max}],
+$$
+
+with center
+
+$$
+\mathbf g_c=\frac{\mathbf g_{\min}+\mathbf g_{\max}}{2},
+$$
+
+and largest geometry dimension
+
+$$
+L_g=\max_\alpha (g_{\max,\alpha}-g_{\min,\alpha}).
+$$
+
+For `outer_box_scale = s_o`, the outer reference boundary is the cube
+
+$$
+\left[
+\mathbf g_c-\frac{s_oL_g}{2}\mathbf 1,\,
+\mathbf g_c+\frac{s_oL_g}{2}\mathbf 1
+\right].
+$$
+
+The default is
+
+$$
+s_o=20.
+$$
+
+If a walk reaches this outer boundary before hitting a conductor, it terminates
+on the reference node at \(0\ \text{V}\).
+
+The Gaussian boxes must lie inside this outer reference boundary.
+
+The current `frw.py` implementation uses the single-dielectric surface Green
+function for a cube centered at the current random-walk point. This follows the
+basic FRW relation
 
 For a point \(\mathbf r\) inside a closed transition surface \(S\), RWCap writes
 the potential as
@@ -165,7 +219,6 @@ where \(P(\mathbf r,\mathbf r^{(1)})\) is the surface Green function. For fixed
 \(\mathbf r\), it is a PDF on \(S\):
 
 $$
-=
 \oint_S P(\mathbf r,\mathbf r^{(1)})\,dS_{\mathbf r^{(1)}}
 =1.
 $$
@@ -263,8 +316,8 @@ $$
 [\mathbf b_{\min}-g\mathbf 1,\ \mathbf b_{\max}+g\mathbf 1].
 $$
 
-The box must lie strictly inside the problem domain. Sample points are drawn
-uniformly by surface area over the six faces.
+The box must lie strictly inside the FRW outer reference boundary. Sample points
+are drawn uniformly by surface area over the six faces.
 
 The present charge estimator uses a first-order finite-distance flux model:
 
@@ -304,9 +357,9 @@ $$
 \left(\mathbf e_i-\mathbf e_h\right),
 $$
 
-where \(h\) is the hit conductor index. If the walk exits through the domain
-boundary, \(\mathbf e_h\) is omitted, corresponding to the reference boundary at
-\(0\ \text{V}\).
+where \(h\) is the hit conductor index. If the walk exits through the FRW outer
+reference boundary, \(\mathbf e_h\) is omitted, corresponding to the reference
+boundary at \(0\ \text{V}\).
 
 This estimator is useful for building the solver structure and statistics, but
 the Gaussian-box finite-difference weight is still a low-order approximation.
@@ -323,13 +376,13 @@ $$
 \mathbf Q = \mathbf C\mathbf V.
 $$
 
-The initial framework will keep the same public API as BEM:
+The FRW solver keeps the same public API as BEM:
 
 ```python
 solver.solve_matrix(problem)
 ```
 
-and later return:
+and returns:
 
 - capacitance estimate \(\widehat{\mathbf C}\);
 - per-entry standard errors;
@@ -345,26 +398,40 @@ $$
 
 ## Statistics and stopping
 
-FRW is stochastic, so it needs explicit accuracy controls. Candidate stopping
-criteria:
+FRW is stochastic, so it needs explicit accuracy controls. The current solver
+uses `samples_per_observation_net` as a maximum walk cap, not necessarily as the
+actual number of walks. For each observation net, it runs at least
+`min_samples_per_observation_net` walks, then checks the estimated error every
+`check_interval` walks.
 
-- fixed walks per observation net;
-- fixed walks per matrix entry;
-- relative standard error target:
+The relative standard error target is:
 
 $$
 \frac{\operatorname{SE}(\widehat C_{ik})}{|\widehat C_{ik}|}
 < \tau;
 $$
 
-- absolute standard error target:
+The absolute standard error target is:
 
 $$
 \operatorname{SE}(\widehat C_{ik}) < \eta.
 $$
 
 For small coupling coefficients, relative error can be unstable, so the solver
-should support both relative and absolute stopping thresholds.
+supports both thresholds. In code, an entry is considered converged when
+
+$$
+\operatorname{SE}(\widehat C_{ik})
+\le
+\max\left(
+  \eta,\,
+  \tau|\widehat C_{ik}|
+\right),
+$$
+
+using only the terms whose tolerances are configured. If neither tolerance is
+set, the solver performs the full `samples_per_observation_net` walks. The
+maximum cap is retained to prevent no-stop situations.
 
 ## Important papers and implementations
 
@@ -422,8 +489,8 @@ The current code milestone is a runnable prototype:
 - `FRWResult.capacitance` contains a Monte Carlo estimate;
 - `FRWResult.standard_error` contains per-entry independent-sample standard
   errors for the reduced matrix;
-- `FRWStatistics` records sample count, seed, transition parameters, completed
-  walks, and escaped walks;
+- `FRWStatistics` records max sample count, actual walks per observation net,
+  seed, transition parameters, completed walks, and escaped walks;
 - `create_solver("bem" | "frw")` selects between solver backends.
 
 The prototype is suitable for exercising the API, studying random-walk

@@ -195,6 +195,7 @@ def draw_gaussian_surfaces(
     solver: FRWSolver,
     *,
     show: bool = True,
+    show_outer_boundary: bool = False,
 ) -> Path:
     output = Path(__file__).with_name("run_frw_gaussian_surfaces.png")
     nets = problem.nets()
@@ -205,6 +206,20 @@ def draw_gaussian_surfaces(
     all_min = []
     all_max = []
     legend_handles = []
+    if show_outer_boundary:
+        outer = solver.outer_boundary_box(problem)
+        all_min.append(outer.min_array)
+        all_max.append(outer.max_array)
+        _draw_box_wireframe(ax, outer.min_array, outer.max_array, color="#444444", linewidth=0.8)
+        legend_handles.append(
+            plt.Line2D(
+                [0],
+                [0],
+                color="#444444",
+                linestyle="--",
+                label="FRW outer boundary",
+            )
+        )
     for net_index, net in enumerate(nets):
         color = NET_COLORS[net_index % len(NET_COLORS)]
         legend_handles.append(
@@ -255,6 +270,124 @@ def draw_gaussian_surfaces(
     fig.savefig(output)
     if show:
         print("Close the FRW Gaussian-surface window to continue.")
+        plt.show()
+    return output
+
+
+def draw_frw_walks(
+    problem: CapacitanceProblem,
+    solver: FRWSolver,
+    result,
+    *,
+    show: bool = True,
+    show_outer_boundary: bool = False,
+) -> Path:
+    output = Path(__file__).with_name("run_frw_walks.png")
+    nets = problem.nets()
+
+    fig = plt.figure(figsize=(9, 7), dpi=180)
+    ax = fig.add_subplot(111, projection="3d")
+
+    all_min = []
+    all_max = []
+    if show_outer_boundary:
+        outer = solver.outer_boundary_box(problem)
+        all_min.append(outer.min_array)
+        all_max.append(outer.max_array)
+        _draw_box_wireframe(ax, outer.min_array, outer.max_array, color="#444444", linewidth=0.7)
+    for net_index, net in enumerate(nets):
+        color = NET_COLORS[net_index % len(NET_COLORS)]
+        for conductor in net.boxes:
+            box = conductor.box
+            lo = tuple(float(value) for value in box.min_array)
+            hi = tuple(float(value) for value in box.max_array)
+            all_min.append(box.min_array)
+            all_max.append(box.max_array)
+            ax.add_collection3d(
+                Poly3DCollection(
+                    box_faces(lo, hi),
+                    facecolors=color,
+                    edgecolors="#222222",
+                    linewidths=0.5,
+                    alpha=0.25,
+                )
+            )
+
+        gaussian = solver.gaussian_box(problem, net)
+        all_min.append(gaussian.min_array)
+        all_max.append(gaussian.max_array)
+        _draw_box_wireframe(ax, gaussian.min_array, gaussian.max_array, color=color, linewidth=0.9)
+
+    legend_handles = []
+    total_jumps = sum(max(0, len(trace.points) - 1) for trace in result.representative_walks)
+    cmap = plt.get_cmap("jet", max(total_jumps, 1))
+    jump_index = 0
+    for trace in result.representative_walks:
+        if len(trace.points) == 0:
+            continue
+        points = trace.points
+        for step_index, transition_box in enumerate(trace.transition_boxes):
+            step_color = cmap(jump_index)
+            _draw_box_wireframe(
+                ax,
+                transition_box.min_array,
+                transition_box.max_array,
+                color=step_color,
+                linewidth=0.45,
+            )
+            start_point = points[step_index]
+            end_point = points[step_index + 1]
+            ax.plot(
+                [start_point[0], end_point[0]],
+                [start_point[1], end_point[1]],
+                [start_point[2], end_point[2]],
+                color=step_color,
+                linewidth=1.6,
+                marker="o",
+                markersize=2.2,
+            )
+            jump_index += 1
+            all_min.append(transition_box.min_array)
+            all_max.append(transition_box.max_array)
+        start = points[0]
+        stop = points[-1]
+        ax.scatter([start[0]], [start[1]], [start[2]], color="black", marker="o", s=28)
+        ax.scatter([stop[0]], [stop[1]], [stop[2]], color="black", marker="x", s=34)
+        hit_name = "reference" if trace.hit_net_index is None else nets[trace.hit_net_index].name
+        legend_handles.append(
+            plt.Line2D(
+                [0],
+                [0],
+                color=NET_COLORS[trace.observation_net_index % len(NET_COLORS)],
+                marker="o",
+                label=f"{nets[trace.observation_net_index].name} walk -> {hit_name}",
+            )
+        )
+        all_min.append(points.min(axis=0))
+        all_max.append(points.max(axis=0))
+
+    mins, maxs = _plot_bounds(all_min, all_max)
+    ax.set_xlim(mins[0], maxs[0])
+    ax.set_ylim(mins[1], maxs[1])
+    ax.set_zlim(mins[2], maxs[2])
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_zlabel("z")
+    ax.set_title("Representative FRW walks")
+    ax.view_init(elev=24, azim=-56)
+    ax.set_box_aspect(maxs - mins)
+    if legend_handles:
+        ax.legend(handles=legend_handles, loc="upper left")
+    if total_jumps > 0:
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=1, vmax=total_jumps))
+        sm.set_array([])
+        cbar = fig.colorbar(sm, ax=ax, shrink=0.62, pad=0.08)
+        cbar.set_label("jump order")
+
+    fig.tight_layout()
+    fig.savefig(output)
+    if show:
+        print("Close the FRW walk window to finish.")
         plt.show()
     return output
 

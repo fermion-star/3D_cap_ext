@@ -38,7 +38,7 @@ class DenseBEMSolver(CapacitanceSolver):
         self,
         *,
         max_panel_size: float = 20.0,
-        symmetrize: bool = True,
+        symmetrize: bool = False,  # yifan set to false until the whole thing is perfect
         contact_tol: float = 1e-12,
         add_reference_node: bool = False,
         reference_name: str = "enclosure",
