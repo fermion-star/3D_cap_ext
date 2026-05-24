@@ -104,3 +104,33 @@ row sums [F]:
 statistics:
 FRWStatistics(max_samples_per_observation_net=20000, min_samples_per_observation_net=200, check_interval=200, seed=2, relative_tolerance=0.05, absolute_tolerance=1e-12, gaussian_padding=10.0, outer_box_scale=20.0, transition_safety=1.0, transition_grid_size=31, transition_series_terms=41, hit_tolerance=1e-06, max_steps_per_walk=5000, walks_per_observation_net=(4600, 5200), completed_walks=9800, escaped_walks=0)
 walks per observation net: (4600, 5200)
+
+## Prototype 03 result
+capacitance matrix estimate [F]:
+[[ 5.543114e-09 -1.163134e-09 -4.379980e-09]
+ [-1.342549e-09  4.752101e-09 -3.409552e-09]
+ [-4.200566e-09 -3.588966e-09  7.789532e-09]]
+standard error estimate [F]:
+[[3.631270e-10 1.020504e-10          nan]
+ [8.962405e-11 3.160712e-10          nan]
+ [         nan          nan          nan]]
+row sums [F]:
+[0. 0. 0.]
+statistics:
+FRWStatistics(max_samples_per_observation_net=20000, min_samples_per_observation_net=200, check_interval=200, seed=2, relative_tolerance=0.05, absolute_tolerance=1e-12, gaussian_padding=10.0, outer_box_scale=20.0, transition_safety=1.0, transition_grid_size=31, transition_series_terms=41, hit_tolerance=1e-06, max_steps_per_walk=5000, walks_per_observation_net=(20000, 20000), completed_walks=40000, escaped_walks=0)
+walks per observation net: (20000, 20000)
+completed walks: 40000
+escaped walks: 0
+total walks: 40000
+representative walk: left+left_extension -> left+left_extension points=25 escaped=False
+representative walk: right -> left+left_extension points=14 escaped=False
+
+Prototype 03 relative error vs BEM max_panel_size=5:
+self capacitance:
+left+left_extension: +6.480236e-02
+right: -1.438935e-02
+mean absolute self error: 3.959585e-02
+coupling capacitance:
+C(left+left_extension, right): -1.768033e-01
+C(right, left+left_extension): -4.982411e-02
+mean absolute coupling error: 1.133137e-01
