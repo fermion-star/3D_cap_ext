@@ -134,7 +134,7 @@ class FRWSolver(CapacitanceSolver):
         self._escaped_walks = 0
 
         for observation_net_index, net in enumerate(nets):
-            gaussian_box = self._gaussian_box(problem, net)
+            gaussian_box = self.gaussian_box(problem, net)
             gaussian_area = _box_surface_area(gaussian_box)
             flux_weight = problem.epsilon * gaussian_area / self.gaussian_padding
             samples = np.zeros((self.samples_per_observation_net, net_count), dtype=float)
@@ -175,7 +175,7 @@ class FRWSolver(CapacitanceSolver):
     def solve_matrix(self, problem: CapacitanceProblem) -> np.ndarray:
         return self.solve(problem).capacitance
 
-    def _gaussian_box(self, problem: CapacitanceProblem, net: NetConductor) -> AxisAlignedBox:
+    def gaussian_box(self, problem: CapacitanceProblem, net: NetConductor) -> AxisAlignedBox:
         mins = np.min(np.vstack([conductor.box.min_array for conductor in net.boxes]), axis=0)
         maxs = np.max(np.vstack([conductor.box.max_array for conductor in net.boxes]), axis=0)
         lo = mins - self.gaussian_padding

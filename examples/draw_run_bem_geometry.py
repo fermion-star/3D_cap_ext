@@ -8,6 +8,7 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from capext.geometry import BoxConductor, NetConductor
 from capext.mesh import SurfacePanel, mesh_net_surfaces
 from capext.problem import CapacitanceProblem
+from capext.solvers import FRWSolver
 
 
 NET_COLORS = [
@@ -187,6 +188,103 @@ def count_bem_unknowns(
             NetConductor("physical_outer_box", (outer,)),
         ]
     return len(mesh_net_surfaces(nets, max_panel_size=max_panel_size))
+
+
+def draw_gaussian_surfaces(
+    problem: CapacitanceProblem,
+    solver: FRWSolver,
+    *,
+    show: bool = True,
+) -> Path:
+    output = Path(__file__).with_name("run_frw_gaussian_surfaces.png")
+    nets = problem.nets()
+
+    fig = plt.figure(figsize=(9, 7), dpi=180)
+    ax = fig.add_subplot(111, projection="3d")
+
+    all_min = []
+    all_max = []
+    legend_handles = []
+    for net_index, net in enumerate(nets):
+        color = NET_COLORS[net_index % len(NET_COLORS)]
+        legend_handles.append(
+            plt.Line2D(
+                [0],
+                [0],
+                marker="s",
+                color=color,
+                label=f"{net.name} conductor",
+                markerfacecolor=color,
+                markersize=8,
+            )
+        )
+
+        for conductor in net.boxes:
+            box = conductor.box
+            lo = tuple(float(value) for value in box.min_array)
+            hi = tuple(float(value) for value in box.max_array)
+            all_min.append(box.min_array)
+            all_max.append(box.max_array)
+            poly = Poly3DCollection(
+                box_faces(lo, hi),
+                facecolors=color,
+                edgecolors="#222222",
+                linewidths=0.7,
+                alpha=0.45,
+            )
+            ax.add_collection3d(poly)
+
+        gaussian = solver.gaussian_box(problem, net)
+        all_min.append(gaussian.min_array)
+        all_max.append(gaussian.max_array)
+        _draw_box_wireframe(ax, gaussian.min_array, gaussian.max_array, color=color, linewidth=1.3)
+
+    mins, maxs = _plot_bounds(all_min, all_max)
+    ax.set_xlim(mins[0], maxs[0])
+    ax.set_ylim(mins[1], maxs[1])
+    ax.set_zlim(mins[2], maxs[2])
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_zlabel("z")
+    ax.set_title(f"FRW Gaussian surfaces (padding={solver.gaussian_padding:g})")
+    ax.view_init(elev=24, azim=-56)
+    ax.set_box_aspect(maxs - mins)
+    ax.legend(handles=legend_handles, loc="upper left")
+
+    fig.tight_layout()
+    fig.savefig(output)
+    if show:
+        print("Close the FRW Gaussian-surface window to continue.")
+        plt.show()
+    return output
+
+
+def _draw_box_wireframe(ax, lo, hi, *, color: str, linewidth: float) -> None:
+    x0, y0, z0 = lo
+    x1, y1, z1 = hi
+    edges = [
+        ((x0, y0, z0), (x1, y0, z0)),
+        ((x1, y0, z0), (x1, y1, z0)),
+        ((x1, y1, z0), (x0, y1, z0)),
+        ((x0, y1, z0), (x0, y0, z0)),
+        ((x0, y0, z1), (x1, y0, z1)),
+        ((x1, y0, z1), (x1, y1, z1)),
+        ((x1, y1, z1), (x0, y1, z1)),
+        ((x0, y1, z1), (x0, y0, z1)),
+        ((x0, y0, z0), (x0, y0, z1)),
+        ((x1, y0, z0), (x1, y0, z1)),
+        ((x1, y1, z0), (x1, y1, z1)),
+        ((x0, y1, z0), (x0, y1, z1)),
+    ]
+    for start, stop in edges:
+        ax.plot(
+            [start[0], stop[0]],
+            [start[1], stop[1]],
+            [start[2], stop[2]],
+            color=color,
+            linewidth=linewidth,
+            linestyle="--",
+        )
 
 
 def _plot_bounds(all_min, all_max):

@@ -77,3 +77,14 @@ relative difference vs max_panel_size=5 (Frobenius norm)
 20: 1.827916e-02
 15: 1.158122e-02
 10: 6.256171e-03
+
+# FRW
+## Prototype 01 result
+capacitance matrix estimate [F]:
+[[ 1.360003e-08 -2.146255e-09 -1.145378e-08]
+ [-2.146255e-09  9.299022e-09 -7.152767e-09]
+ [-1.145378e-08 -7.152767e-09  1.860654e-08]]
+standard error estimate [F]:
+[[4.434177e-10 1.966186e-10          nan]
+ [1.966186e-10 3.389768e-10          nan]
+ [         nan          nan          nan]]

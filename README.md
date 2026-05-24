@@ -16,6 +16,12 @@ PYTHONPATH=src python examples/run_bem.py
 
 The BEM solver uses rectangular constant-charge panels on the exterior surface of each merged net. It approximates panels as equal-area disks for self terms and near off-axis interactions, while far interactions use the faster point-center approximation.
 
+The FRW prototype example shows the Gaussian surfaces before running:
+
+```bash
+PYTHONPATH=src python examples/run_frw.py
+```
+
 ## Solver switch
 
 Use the solver factory when code should choose between solver backends:
